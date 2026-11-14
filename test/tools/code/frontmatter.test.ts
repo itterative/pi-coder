@@ -67,7 +67,8 @@ describe("markdown frontmatter indexing", () => {
             query: "ceiling arithmetic",
         });
 
-        expect(result.text).toContain("mem/decode.md:1-5");
+        expect(result.text).toContain("mem/decode.md");
+        expect(result.text).toContain(":1-5");
         expect(result.text).toContain("[frontmatter]");
         // The summary counts the same rows with the same name the row label uses.
         expect(result.text).toContain("1 by frontmatter");

@@ -142,9 +142,9 @@ describe("outline flow", () => {
         });
 
         expect(first.truncated).toBe(true);
-        expect(first.text).toContain("# next: offset=");
+        expect(first.text).toContain("# next: ");
 
-        const offset = Number(/# next: offset=(\d+)/.exec(first.text)?.[1] ?? "0");
+        const offset = Number(/offset=(\d+)\)/.exec(first.text)?.[1] ?? "0");
         const second = await runFlow(source(), {
             action: "flow",
             path: "test/suites.test.ts",

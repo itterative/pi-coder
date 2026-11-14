@@ -50,10 +50,26 @@ describe("outline usages rows", () => {
         expect(result.text).toContain(`· ${result.matches} matches on ${rows.length} line(s) ·`);
     });
 
+    it("names each requested symbol once under a shared page header", async () => {
+        const result = await runUsages(source(), {
+            action: "usages",
+            path: "src",
+            query: "scrollOffset, bump",
+            limit: 900,
+        });
+        const [header = ""] = result.text.split("\n");
+
+        expect(header).toBe("# usages scrollOffset, bump · typescript · syntactic (name-based)");
+        expect(result.text).toContain("\nscrollOffset · ");
+        expect(result.text).toContain("\nbump · ");
+        // The per-symbol line is a subheading: the command, language, and resolution note are not said twice.
+        expect(result.text.match(/# usages/gu)).toHaveLength(1);
+    });
+
     it("keeps the count plain when nothing collapsed", async () => {
         const result = await runUsages(source(), { action: "usages", path: "src", query: "bump" });
 
-        expect(result.text).toMatch(/· \d+ matches · /);
+        expect(result.text).toMatch(/· \d+ match(?:es)? · /u);
         expect(result.text).not.toContain("line(s)");
     });
 });

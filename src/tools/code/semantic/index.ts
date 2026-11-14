@@ -13,14 +13,7 @@ import { chunkKeyOf, chunksOf, type CodeChunk } from "./chunks";
 import { type SemanticMode } from "./config";
 import type { DevicePreference } from "./llamacpp";
 import { modelProfile } from "./profiles";
-import {
-    DENSE_FLOOR,
-    TAIL_ROWS,
-    aboveFloor,
-    fuseRankings,
-    type RankedDeclaration,
-    type ScoredDeclaration,
-} from "./rank";
+import { DENSE_FLOOR, TAIL_ROWS, aboveFloor, fuseRankings, type ScoredDeclaration } from "./rank";
 import {
     createEmbedRuntime,
     refreshConcurrency,
@@ -301,7 +294,7 @@ export function createSemanticSearch(deps: SemanticDeps): SemanticSearch {
 
             runtime = undefined;
         },
-        async rank(request: SemanticQuery, signal?: AbortSignal): Promise<RankedDeclaration[]> {
+        async rank(request: SemanticQuery, signal?: AbortSignal): Promise<ScoredDeclaration[]> {
             // Each channel keeps only the rows near its own best score, so a query with one real answer does not
             // carry seven token-sharing guesses. The floor runs before fusion because the channels' scales never
             // have to agree there either.
@@ -311,6 +304,7 @@ export function createSemanticSearch(deps: SemanticDeps): SemanticSearch {
                     declaration: hit.declaration,
                     comment: hit.comment,
                     score: hit.score,
+                    scale: "bm25" as const,
                 })),
             );
 
@@ -773,6 +767,7 @@ async function denseRanking(
             comment: candidate.comment,
             chunk: candidate.chunk,
             score: candidate.score,
+            scale: "cosine" as const,
         }));
 
     return { hits, missing, live, dead, refreshRoot: resolved.root, refreshCoversRoot: coversRoot };

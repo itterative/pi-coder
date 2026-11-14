@@ -1,5 +1,6 @@
 import { MAX_FILES } from "./languages";
 import type {
+    CodeToolParams,
     Declaration,
     DeclarationKind,
     DeclarationRange,
@@ -385,6 +386,17 @@ export function counted(count: number, noun: string): string {
 }
 
 /**
+ * A parse-error note that says whose problem it is.
+ *
+ * The grammar recovers from syntax it cannot reduce instead of failing the parse, so an error node means the tree is
+ * still usable and something may be missing. Only the grammar can fix that, so the note names the parser and never
+ * promises the result is complete.
+ */
+export function parseErrorNote(parseErrors: number, missing: string): string {
+    return `# parse: tree-sitter recovered from ${counted(parseErrors, "syntax error")}; ${missing}`;
+}
+
+/**
  * A scope the caller did not name reads as the whole tree, not as a lone `.`.
  *
  * `# show . BashTokenizer::tokenize` was the tool echoing an empty path back at the caller; the dot is a default, not
@@ -604,204 +616,209 @@ export function shortLine(text: string, limit = 180): string {
 export interface BudgetedText {
     text: string;
     truncated: boolean;
-    /** Body lines skipped by this page. */
+    /** Rendered line this page starts at (0-based). */
     offset: number;
-    /** Absolute body-line offset for the next page, when content remains. */
+    /** Rendered line the next page starts at, when content remains. */
     nextOffset?: number;
-    /** Body lines this page did not reach. */
+    /** Rendered lines this page did not reach. */
     remaining: number;
-    /** Body lines in the whole result. */
+    /** Rendered lines in the whole body. */
     total: number;
 }
 
-interface LaidBlock {
-    text: string;
-    lines: string[];
-    /** Absolute body-line index of this block's first line. */
-    start: number;
-}
-
-interface BlockPosition {
-    index: number;
-    /** Lines into the block to start at. */
-    intra: number;
-}
-
-interface FittedLines {
-    text: string;
-    kept: number;
-}
-
-/** Join header and blocks, stopping at a block boundary when the character limit is reached. */
+/**
+ * Fit whole rendered lines into a character budget.
+ *
+ * The budget is the page size a caller asked for with `limit`, so it decides where a page ends; the unit of `offset`
+ * is the rendered line, which is the text the caller is reading. Blocks are not allocated: they are only a source of
+ * group headings, so a continuation can be reprinted with the heading it lost and a cut never ends on one.
+ */
 export function renderWithinBudget(
     header: string,
     blocks: readonly string[],
     limit: number,
     offset = 0,
-    options: { blockTitles?: readonly string[] } = {},
+    options: { headings?: boolean } = {},
 ): BudgetedText {
-    const startOffset = Math.max(0, Math.floor(offset));
-    const laid = layBlocks(blocks);
+    const { lines, starts } = flattenBlocks(blocks);
+    const total = lines.length;
+    const start = skipBlankLines(lines, Math.max(0, Math.floor(offset)));
 
-    if (laid.length === 0) {
-        return noContent(header, startOffset);
+    if (total === 0) {
+        return { text: header, truncated: start > 0, offset: start, remaining: 0, total: 0 };
     }
 
-    const totalLines = bodyLineCount(laid);
-
-    if (startOffset >= totalLines) {
+    if (start >= total) {
         return {
-            ...noContent(header, startOffset),
-            text: `${header}\n# offset ${startOffset} is beyond the end (${totalLines} body line(s))`,
+            text: `${header}\n# offset ${start} is beyond the end (${total} line(s))`,
             truncated: false,
-            total: totalLines,
+            offset: start,
+            remaining: 0,
+            total,
         };
     }
 
-    const position = positionAt(laid, startOffset);
-    const parts: string[] = [header];
-    let used = header.length;
-    let index = position.index;
-    let included = 0;
+    // A block that leads with a heading loses it when a page starts inside the block, and the rows then arrive with
+    // nothing saying what they belong to. Only callers whose blocks really lead with a heading ask for this.
+    const blockStarts = options.headings === true ? starts : [];
+    const groupStart = blockStarts.findLast((candidate) => candidate <= start);
+    let heading =
+        groupStart !== undefined && start > groupStart ? `${lines[groupStart] ?? ""}\n` : "";
+    const content = Math.max(0, limit - header.length - 2);
+    let kept = fitLines(lines, start, Math.max(0, content - heading.length));
 
-    if (position.intra > 0) {
-        const block = laid[index];
-
-        if (block === undefined) {
-            return noContent(header, startOffset);
-        }
-
-        // A page that starts mid-block has lost that block's heading, so the rows arrive with nothing saying what
-        // they are. Callers with titled blocks name them; the heading is reprinted at the top of the continuation.
-        const title = options.blockTitles?.[index];
-        const label = title === undefined ? "" : `${title}\n`;
-        const suffix = `${label}${block.lines.slice(position.intra).join("\n")}`;
-        const cost = suffix.length + 1;
-        const fitted = takeLines(suffix, Math.max(0, limit - used - 1), used);
-
-        if (used + cost > limit) {
-            parts.push(fitted.text);
-
-            return omittedAfter(parts, fitted.kept, laid.length - index - 1, {
-                startOffset,
-                endOffset: startOffset + fitted.kept,
-                total: totalLines,
-            });
-        }
-
-        parts.push(suffix);
-        used += cost;
-        index += 1;
-        included = 1;
+    // A heading is worth a line, never the page: when reprinting it would crowd out the only content line, the
+    // content wins and the heading is dropped.
+    if (kept === 0 && heading.length > 0) {
+        heading = "";
+        kept = fitLines(lines, start, content);
     }
 
-    for (; index < laid.length; index += 1) {
-        const block = laid[index];
+    if (kept === 0) {
+        const first = lines[start] ?? "";
+        const needed = header.length + 2 + heading.length + first.length + 1;
 
-        if (block === undefined) {
-            continue;
-        }
-
-        const cost = block.text.length + 1;
-
-        if (used + cost > limit) {
-            if (included === 0) {
-                const fitted = takeLines(block.text, Math.max(0, limit - used - 1), used);
-                parts.push(fitted.text);
-
-                return omittedAfter(parts, fitted.kept, laid.length - index - 1, {
-                    startOffset,
-                    endOffset: block.start + fitted.kept,
-                    total: totalLines,
-                });
-            }
-
-            parts.push(`# omitted ${laid.length - index} more block(s) at the character limit`);
-
-            return {
-                text: parts.join("\n\n"),
-                truncated: true,
-                offset: startOffset,
-                nextOffset: block.start,
-                remaining: totalLines - block.start,
-                total: totalLines,
-            };
-        }
-
-        parts.push(block.text);
-        used += cost;
-        included += 1;
+        return {
+            text: `${header}\n# the next line needs about ${needed} chars; raise limit to at least ${needed}`,
+            truncated: true,
+            offset: start,
+            remaining: total - start,
+            total,
+        };
     }
+
+    let shown = start + kept;
+
+    // A cut straight after a heading names a group and shows none of it; the heading belongs to the next page.
+    if (shown - 1 > start && shown < total && blockStarts.includes(shown - 1)) {
+        shown -= 1;
+    }
+
+    // A separator line is a line for the budget, but it is not content: never end a page on one. This runs after
+    // the retreat, because moving the cut back onto a separator is exactly what re-exposes one.
+    while (shown > start && (lines[shown - 1] ?? "").length === 0) {
+        shown -= 1;
+    }
+
+    const end = skipBlankLines(lines, shown);
 
     return {
-        text: parts.join("\n\n"),
-        truncated: startOffset > 0,
-        offset: startOffset,
-        remaining: 0,
-        total: totalLines,
+        text: `${header}\n\n${heading}${lines.slice(start, shown).join("\n")}`,
+        truncated: start > 0 || end < total,
+        offset: start,
+        ...(end < total ? { nextOffset: end } : {}),
+        remaining: Math.max(0, total - end),
+        total,
     };
 }
 
-function noContent(header: string, offset: number): BudgetedText {
-    return {
-        text: header,
-        truncated: offset > 0,
-        offset,
-        remaining: 0,
-        total: 0,
-    };
+interface Layout {
+    lines: string[];
+    /** Body-line index of each block's first line. */
+    starts: number[];
 }
 
-/**
- * Build a page that stopped inside a block.
- *
- * The trailing note names the blocks left after this one, because a page cut inside the first body otherwise hides
- * every later block with no trace: a caller cannot tell "not found" from "not reached".
- */
-function omittedAfter(
-    parts: readonly string[],
-    kept: number,
-    blocksLeft: number,
-    page: { startOffset: number; endOffset: number; total: number },
-): BudgetedText {
-    const lines = [...parts];
+/** A result's rendered lines: the blocks in order, one blank line between two of them. */
+function flattenBlocks(blocks: readonly string[]): Layout {
+    const lines: string[] = [];
+    const starts: number[] = [];
 
-    if (blocksLeft > 0) {
-        lines.push(`# omitted ${blocksLeft} more block(s) after this body`);
+    for (const block of blocks) {
+        if (lines.length > 0) {
+            lines.push("");
+        }
+
+        starts.push(lines.length);
+        lines.push(...block.split("\n"));
     }
 
-    return {
-        text: lines.join("\n\n"),
-        truncated: true,
-        offset: page.startOffset,
-        ...(kept > 0 ? { nextOffset: page.endOffset } : {}),
-        remaining: Math.max(0, page.total - page.endOffset),
-        total: page.total,
-    };
+    return { lines, starts };
+}
+
+/** The first content line at or after `index`: a page never begins with the blank line between two blocks. */
+function skipBlankLines(lines: readonly string[], index: number): number {
+    let next = index;
+
+    while (next < lines.length && (lines[next] ?? "").length === 0) {
+        next += 1;
+    }
+
+    return next;
+}
+
+/** How many whole lines fit from `start` under `budget` characters. */
+function fitLines(lines: readonly string[], start: number, budget: number): number {
+    let used = 0;
+    let kept = 0;
+
+    for (let index = start; index < lines.length; index += 1) {
+        const line = lines[index] ?? "";
+
+        if (used + line.length + 1 > budget) {
+            break;
+        }
+
+        used += line.length + 1;
+        kept += 1;
+    }
+
+    return kept;
 }
 
 /**
- * A one-line continuation hint for a character-limited result.
+ * The one continuation hint for a cut result.
  *
- * It names what is left in lines as well as the next offset, because the page step is set by the character budget,
- * not by a line count: without the remaining count, a caller cannot tell whether one call or eight remain.
+ * It prints the whole call rather than a bare number: pasting it back reproduces this page's action, path, query,
+ * filters, and limit, so the next page answers the same question. The remaining count is in rendered lines, the same
+ * unit `offset` uses.
  */
 export function nextOffsetNote(
     fitted: BudgetedText,
-    options: { offset?: number; where?: string; sourceLine?: boolean; unit?: string } = {},
+    params: CodeToolParams,
+    options: { offset?: number; where?: string; sourceLine?: boolean } = {},
 ): string | undefined {
     if (fitted.nextOffset === undefined) {
         return undefined;
     }
 
     const offset = options.offset ?? fitted.nextOffset;
-    const where = options.where === undefined ? "" : ` of ${options.where}`;
-    const marker = options.sourceLine === true ? " (source line)" : "";
-    const unit = options.unit ?? "body line";
-    const scope =
-        fitted.remaining > 0 ? ` · ${fitted.remaining} of ${fitted.total} ${unit}(s) left` : "";
+    const where = options.where === undefined ? "" : ` · in ${options.where}`;
+    const unit = options.sourceLine === true ? " · source line, resumable with read" : "";
 
-    return `# next: offset=${offset}${where}${marker}${scope} · raise limit to fit more per call`;
+    return `# next: ${fitted.remaining} more line(s) · ${resumeCall(params, offset)}${where}${unit}`;
+}
+
+/** The call that produces the next page, carrying every parameter that shaped this one. */
+export function resumeCall(params: CodeToolParams, offset: number): string {
+    const args = [`action=${JSON.stringify(params.action)}`];
+
+    if (params.path !== undefined) {
+        args.push(`path=${JSON.stringify(params.path)}`);
+    }
+
+    if (params.query !== undefined) {
+        args.push(`query=${JSON.stringify(params.query)}`);
+    }
+
+    if (params.detail !== undefined) {
+        args.push(`detail=${JSON.stringify(params.detail)}`);
+    }
+
+    if (params.kind !== undefined) {
+        args.push(`kind=${JSON.stringify(params.kind)}`);
+    }
+
+    if (params.within !== undefined) {
+        args.push(`within=${JSON.stringify(params.within)}`);
+    }
+
+    if (params.limit !== undefined) {
+        args.push(`limit=${params.limit}`);
+    }
+
+    args.push(`offset=${offset}`);
+
+    return `outline(${args.join(", ")})`;
 }
 
 /**
@@ -821,101 +838,9 @@ export function defaultScopeNote(path: string | undefined): string | undefined {
     return "# note: the default scan skips ignored paths (ignore files, node_modules, build, third_party); pass path= to search one";
 }
 
-/** Body-line index of each block's first line, matching `renderWithinBudget`'s layout. */
+/** Rendered line of each block's first line; `flattenBlocks` inserts the blank line this counts. */
 export function blockLineStarts(blocks: readonly string[]): number[] {
-    const starts: number[] = [];
-    let start = 0;
-
-    for (const block of blocks) {
-        starts.push(start);
-        start += block.split("\n").length + 1;
-    }
-
-    return starts;
-}
-
-function layBlocks(blocks: readonly string[]): LaidBlock[] {
-    const laid: LaidBlock[] = [];
-    let start = 0;
-
-    for (const text of blocks) {
-        const lines = text.split("\n");
-
-        laid.push({ text, lines, start });
-        start += lines.length + 1;
-    }
-
-    return laid;
-}
-
-function bodyLineCount(laid: readonly LaidBlock[]): number {
-    const last = laid.at(-1);
-
-    return last === undefined ? 0 : last.start + last.lines.length;
-}
-
-function positionAt(laid: readonly LaidBlock[], offset: number): BlockPosition {
-    for (let index = 0; index < laid.length; index += 1) {
-        const block = laid[index];
-
-        if (block === undefined) {
-            continue;
-        }
-
-        const end = block.start + block.lines.length;
-
-        if (offset < end) {
-            return { index, intra: offset - block.start };
-        }
-
-        const next = laid[index + 1];
-
-        if (next !== undefined && offset < next.start) {
-            return { index: index + 1, intra: 0 };
-        }
-    }
-
-    return { index: Math.max(0, laid.length - 1), intra: 0 };
-}
-
-function takeLines(text: string, maxCharacters: number, headerChars = 0): FittedLines {
-    if (text.length <= maxCharacters) {
-        return { text, kept: text.split("\n").length };
-    }
-
-    const lines = text.split("\n");
-    const kept: string[] = [];
-    let used = 0;
-
-    for (const line of lines) {
-        if (used + line.length + 1 > maxCharacters) {
-            break;
-        }
-
-        kept.push(line);
-        used += line.length + 1;
-    }
-
-    if (kept.length === 0) {
-        const firstLine = lines[0] ?? "";
-        const needed = headerChars + firstLine.length + 1;
-
-        return {
-            text: `# … the next block needs about ${needed} chars; raise limit to at least ${needed} to show it, or continue with offset=`,
-            kept: 0,
-        };
-    }
-
-    const omitted = Math.max(1, lines.length - kept.length);
-
-    return {
-        text: `${kept.join("\n")}\n# … truncated ${omitted} line(s)`,
-        kept: kept.length,
-    };
-}
-
-export function truncateLines(text: string, maxCharacters: number): string {
-    return takeLines(text, maxCharacters).text;
+    return flattenBlocks(blocks).starts;
 }
 
 function splitParameters(text: string): string[] {

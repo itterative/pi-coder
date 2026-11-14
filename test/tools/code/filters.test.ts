@@ -295,7 +295,7 @@ describe("outline kind filter", () => {
         // The map would answer a different question: it names directories, not functions.
         expect(result.text).not.toContain("declarations exceed the");
         expect(result.text).toContain("unit");
-        expect(result.text).toContain("# next: offset=");
+        expect(result.text).toContain("# next: ");
         expect(result.text).toContain("kind=function");
     });
 });

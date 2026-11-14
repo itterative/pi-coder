@@ -197,8 +197,9 @@ export async function runFlow(
         body,
         limit,
         offset,
+        { headings: true },
     );
-    const next = nextOffsetNote(fitted);
+    const next = nextOffsetNote(fitted, params);
 
     return {
         text: bodyThenFooter([fitted.text], [...notes, next]),

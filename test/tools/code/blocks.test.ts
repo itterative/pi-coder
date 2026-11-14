@@ -163,9 +163,9 @@ describe("outline blocks", () => {
             query: "maps a module",
         });
 
-        expect(result.text).toContain(
-            'test/suite.test.ts:8-12  it  "maps a module"  (outline digest)',
-        );
+        // The file is a heading; each row under it is a subitem.
+        expect(result.text).toContain("test/suite.test.ts");
+        expect(result.text).toContain('  :8-12  it  "maps a module"  (outline digest)');
         // The signature is the title, so printing it too would say the same thing twice.
         expect(result.text).not.toContain('it("maps a module")');
         // The suite's own `[body]` row would put a case's line under the suite's heading.
@@ -179,7 +179,8 @@ describe("outline blocks", () => {
             query: "maps a module",
         });
 
-        expect(result.text).toContain("test/suite.test.ts:8-12");
+        expect(result.text).toContain("test/suite.test.ts");
+        expect(result.text).toContain(":8-12");
         expect(result.text).toContain("outline digest");
         expect(result.text).not.toContain("[def]");
     });

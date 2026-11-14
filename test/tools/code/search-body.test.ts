@@ -121,8 +121,9 @@ describe("outline search body text", () => {
             { action: "search", path: "src", query: "parses the ledger twice" },
         );
 
-        // One declaration, one row: the body row used to repeat the location and carry the evidence alone.
-        expect(result.text.match(/src\/ledger\.ts:2-5/g)).toHaveLength(1);
+        // One declaration, one row under its file heading: the body row used to repeat the location.
+        expect(result.text).toContain("src/ledger.ts");
+        expect(result.text.match(/:2-5\s/gu)).toHaveLength(1);
         expect(result.text).toContain("[doc]");
         expect(result.text).toContain(":3  // parses the ledger twice");
     });

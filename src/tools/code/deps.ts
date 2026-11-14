@@ -5,6 +5,7 @@ import {
     bodyThenFooter,
     discoveryCapNote,
     nextOffsetNote,
+    parseErrorNote,
     renderWithinBudget,
     scopeLabel,
 } from "./format";
@@ -132,10 +133,8 @@ export async function runDeps(
         subject.language,
     ].join(" · ");
     const blocks = [importBlock(imports, source), dependentBlock(dependents, source, root)];
-    const fitted = renderWithinBudget(header, blocks, limit, offset, {
-        blockTitles: ["imports", "dependents"],
-    });
-    const next = nextOffsetNote(fitted);
+    const fitted = renderWithinBudget(header, blocks, limit, offset, { headings: true });
+    const next = nextOffsetNote(fitted, params);
     const footer = footerFor({
         discoveryTruncated: discovery.truncated,
         parseErrors,
@@ -295,7 +294,9 @@ function footerFor(options: {
     }
 
     if (options.parseErrors > 0) {
-        footer.push(`# parse: ${options.parseErrors} error node(s); imports may be incomplete`);
+        footer.push(
+            parseErrorNote(options.parseErrors, "some imports and dependents may be missing"),
+        );
     }
 
     if (options.discoveryTruncated) {

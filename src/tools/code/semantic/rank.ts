@@ -42,13 +42,17 @@ export const RELATED_FLOOR_RATIO = 0.65;
 export const DENSE_FLOOR = 0.5;
 
 /**
- * A ranked row carrying the score that placed it.
+ * A ranked row carrying the score that placed it and the scale that score is on.
  *
- * Internal to the tail: the floor is applied where the scores exist, and the score itself never reaches a row's
- * renderer, so `RankedDeclaration` stays the identity a caller passes around.
+ * The scale travels with the score because the caller prints a percentage and the naive conversion differs: a cosine
+ * is already 0-1, while BM25 is unbounded and an RRF sum sits near 0.02. Guessing the unit from the number would
+ * turn a weak cosine into a confident-looking 88%.
  */
+export type RankScale = "bm25" | "cosine" | "rrf";
+
 export interface ScoredDeclaration extends RankedDeclaration {
     score: number;
+    scale: RankScale;
 }
 
 /**
@@ -120,7 +124,7 @@ export function rankKeyOf(owner: {
 export function fuseRankings(
     lists: readonly (readonly RankedDeclaration[])[],
     k = RRF_K,
-): RankedDeclaration[] {
+): ScoredDeclaration[] {
     const scores = new Map<string, { entry: RankedDeclaration; score: number }>();
 
     for (const list of lists) {
@@ -139,5 +143,5 @@ export function fuseRankings(
                 right.score - left.score ||
                 rankKeyOf(left.entry).localeCompare(rankKeyOf(right.entry)),
         )
-        .map((scored) => scored.entry);
+        .map((scored) => ({ ...scored.entry, score: scored.score, scale: "rrf" as const }));
 }

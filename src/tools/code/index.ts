@@ -78,8 +78,9 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
         description:
             "Inspect code structure without reading whole files. Covers C/C++/HIP, JavaScript/TypeScript " +
             "(JSX/TSX), Java, C#, Go, Rust, Python, PHP, Ruby, and Markdown headings; anything else is " +
-            "skipped. Output is character-limited: a cut result ends with `# next: offset=N`, and every " +
-            "header carries `path:start-end`, so a large body costs one `read offset=start limit=n`.",
+            "skipped. Output is character-limited: a cut result ends with a `# next:` line naming what is " +
+            "left and the call that continues it, and every header carries `path:start-end`, so a large " +
+            "body costs one `read offset=start limit=n`.",
         promptSnippet:
             "Map code before reading: digest a file (declarations, test suites, scripts), search names/docs/body " +
             "text, show a body, flow its calls, find usages. Prefer over rg/read.",
@@ -145,7 +146,7 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
             offset: Type.Optional(
                 Type.Number({
                     description:
-                        "Offset for continuing a result cut by the limit (default 0); the previous page names it in # next. A body-line offset for digest, search, usages, flow, and deps; a source line for show, so the note can be passed to read as-is.",
+                        "Offset for continuing a result cut by the limit (default 0); the previous page names it in # next. A rendered-line offset for digest, search, usages, flow, and deps; a source line for show, so the note can be passed to read as-is.",
                     minimum: 0,
                     maximum: 1_000_000,
                 }),

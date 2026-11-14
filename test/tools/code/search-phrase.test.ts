@@ -75,13 +75,15 @@ describe("outline search phrase handling", () => {
         expect(result.text).toContain("[doc]");
     });
 
-    it("names what a cut page left behind", async () => {
-        const sections = Array.from(
-            { length: 8 },
-            (_, index) => `## Section ${index}\n\nadapter detail ${index} for the record.\n`,
-        ).join("\n");
+    it("names the file whose rows a cut page left behind", async () => {
+        const sections = (name: string): string =>
+            Array.from(
+                { length: 8 },
+                (_, index) => `## ${name} ${index}\n\nadapter detail ${index} for the record.\n`,
+            ).join("\n");
         const source = new MemoryCodeSource("/project", {
-            "mem/long.md": `# Long\n\n${sections}`,
+            "mem/a.md": `# A\n\n${sections("A")}`,
+            "mem/b.md": `# B\n\n${sections("B")}`,
         });
         const result = await runSearch(source, {
             action: "search",
@@ -90,10 +92,22 @@ describe("outline search phrase handling", () => {
             limit: 320,
         });
 
-        expect(result.text).toContain("# more:");
-        expect(result.text).toContain("of 8 row(s) on later pages");
-        expect(result.text).toContain("next in mem/long.md");
-        expect(result.text).toContain("raise limit to fit more per call");
+        // The count lives on `# next:` alone; this note adds only the file the page boundary hid.
+        expect(result.text).toContain("# more: later rows continue in mem/b.md");
+        expect(result.text).toMatch(/# next: \d+ more line\(s\) · outline\(action="search"/u);
+
+        // A continuation that lands inside a file reprints its heading, so the rows are not anonymous.
+        const offset = Number(/offset=(\d+)\)/u.exec(result.text)?.[1] ?? "0");
+        const resumed = await runSearch(source, {
+            action: "search",
+            path: "mem",
+            query: "adapter",
+            limit: 320,
+            offset,
+        });
+        const [firstLine = ""] = (resumed.text.split("\n\n")[1] ?? "").split("\n");
+
+        expect(firstLine.startsWith("mem/")).toBe(true);
     });
 });
 

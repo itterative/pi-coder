@@ -1,5 +1,5 @@
 import type { ParsedFile } from "../types";
-import type { RankedDeclaration } from "./rank";
+import type { ScoredDeclaration } from "./rank";
 
 /** One relevance request over the declarations a search already parsed. */
 export interface SemanticQuery {
@@ -30,7 +30,7 @@ export interface SemanticQuery {
 export interface SemanticSearch {
     /** Offered in the footer while the embedding channel is not enabled yet. */
     readonly hint?: string;
-    rank(request: SemanticQuery, signal?: AbortSignal): Promise<RankedDeclaration[]>;
+    rank(request: SemanticQuery, signal?: AbortSignal): Promise<ScoredDeclaration[]>;
     /** Kill the warm embedding child. Long-lived sessions do not need it; scripts and tests do. */
     dispose(): void;
 }

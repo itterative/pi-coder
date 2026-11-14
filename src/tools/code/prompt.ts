@@ -68,8 +68,11 @@ export function outlineGuidePrompt(): string {
         "",
         "Rows are tagged by channel: `[doc]` matched the doc comment, `[body]` literal text inside a",
         "body, `[frontmatter]`, `[def]`/`[decl]` a definition versus only a declaration, and `[related]`",
-        'a ranked guess rather than a match — confirm those with `action="show"`. `usages` and `flow` are',
+        'a ranked guess rather than a match — confirm those with `action="show"`. A related row carries',
+        "its confidence as an integer percentage of the best guess in the result (`[related 73%]`), so the",
+        "ranking can be read without asking again; 100% is the best guess here, not a probability.",
+        "Rows are grouped under their file path, one heading per file. `usages` and `flow` are",
         "syntactic, so overloads, generics, macros, and dynamic dispatch are not resolved. When output",
-        "ends with `# next: offset=N`, call again with the same parameters and that offset.",
+        "ends with a `# next:` line, it carries the complete call that continues the result: make that call.",
     ].join("\n");
 }

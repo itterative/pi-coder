@@ -413,7 +413,8 @@ public:
 
         expect(result.text).toContain('# search "PLAN"');
         expect(result.text).toContain("class  engine::Plan");
-        expect(result.text).toContain("src/engine/plan.cpp:2-5");
+        expect(result.text).toContain("src/engine/plan.cpp");
+        expect(result.text).toContain(":2-5");
         expect(result.text).toContain("make_plan");
         expect(result.text).not.toContain("play");
         expect(result.matches).toBe(3);

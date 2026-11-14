@@ -65,6 +65,14 @@ queries whose answer is absent top out at 0.420–0.540, six whose answer is pre
 gap; the old ORT-era gemma table (0.680 for an absent answer) is *not* evidence about the shipped GGUF and is why the
 value is not inherited per runtime. Rows either floor removes are not counted or labelled.
 
+**The score survives to the row, as an integer percentage.** `fuseRankings` used to drop the score, so a reader could
+not tell the best guess from the last one over the floor. `ScoredDeclaration` carries `score` **and `scale`**
+(`bm25` | `cosine` | `rrf`), and `runSearch` converts by scale: a cosine is already 0-1 so its percentage is the score
+itself (0.71 → `71%`), while BM25 (unbounded) and fused RRF (~0.02) are divided by the best row in the same result
+(100% = best guess here, not certainty). Guessing the unit from the number would inflate a weak cosine. An exact
+channel (`[doc]`, `[body]`, a name match) carries no percentage. Any change to the ranker's return type must keep
+both fields attached, and test doubles must supply them.
+
 ## Literal body text
 
 `body.ts` scans `declaration.bodyRange` for the query's content tokens and reports the **innermost** declaration that

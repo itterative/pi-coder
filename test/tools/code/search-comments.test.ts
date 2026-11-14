@@ -44,7 +44,9 @@ function semanticFor(): SemanticSearch {
             );
             const block = commentBlocksOf(parsed)[0];
 
-            return block === undefined ? [] : [{ file: parsed, comment: block }];
+            return block === undefined
+                ? []
+                : [{ file: parsed, comment: block, score: 0.42, scale: "cosine" }];
         },
         dispose: () => undefined,
     };
@@ -66,7 +68,8 @@ describe("outline search comment blocks", () => {
         expect(result.text).toContain(
             '# search "spend a char budget" in src · 1 file · typescript · 1 match · 1 by comment text',
         );
-        expect(result.text).toContain("src/tools/window.ts:1-5  comment");
+        expect(result.text).toContain("src/tools/window.ts");
+        expect(result.text).toContain("  :1-5  comment");
         // The evidence line loses its `*` decoration: the row is about the prose, not the comment syntax.
         expect(result.text).toContain(
             "  :2  The window allocator: spend a char budget on the items that carry the most context.",
@@ -119,7 +122,8 @@ describe("outline search comment blocks", () => {
 
         expect(result.matches).toBe(0);
         expect(result.text).toContain("no literal matches");
-        expect(result.text).toContain('src/tools/window.ts:1-5  comment  "The window allocator:');
-        expect(result.text).toContain("[related]");
+        expect(result.text).toContain("src/tools/window.ts");
+        expect(result.text).toContain(':1-5  comment  "The window allocator:');
+        expect(result.text).toMatch(/\[related \d+%\]/u);
     });
 });

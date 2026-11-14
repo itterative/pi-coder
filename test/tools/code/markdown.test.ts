@@ -91,7 +91,7 @@ describe("Markdown adapter", () => {
         expect(digest.text).toContain("markdown");
         expect(digest.text).toContain("## Install");
         expect(digest.text).toContain("### Example");
-        expect(searched.text).toContain("heading  Guide::Install");
+        expect(searched.text).toContain("heading  ## Install");
         expect(shown.text).toContain("heading Guide::Install · definition");
         expect(shown.text).toContain("npm install");
         expect(shown.text).not.toContain("## Usage");
@@ -133,7 +133,7 @@ describe("Markdown adapter", () => {
             query: "Guide::Install",
         });
 
-        expect(searched.text).toContain("Guide::Install");
+        expect(searched.text).toContain("heading  ## Install");
         expect(searched.text).toContain("[doc]");
         // The doc range sits inside the section range, so only the section slice may render it.
         expect(shown.text.split("Run `npm install`.").length - 1).toBe(1);

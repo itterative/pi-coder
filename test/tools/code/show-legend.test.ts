@@ -59,7 +59,9 @@ describe("outline show pagination", () => {
             limit: 400,
         });
 
-        expect(result.text).toContain("# omitted 1 more block(s) after this body");
+        // The page says what is left and how to continue; the header already lists the symbol it did not reach.
+        expect(result.text).toMatch(/# next: \d+ more line\(s\) · outline\(/u);
+        expect(result.text).toContain("engine::zzz_helper");
     });
 
     it("reports the remaining line count on a continuation", async () => {
@@ -70,12 +72,10 @@ describe("outline show pagination", () => {
             limit: 400,
         });
 
-        // Both the continuation and what is left, because the page step is set by the character budget.
+        // One count and one call: the call reproduces the query, and the offset is a source line `read` accepts.
         expect(result.text).toMatch(
-            /# next: offset=\d+ \(source line\) · \d+ of \d+ body line\(s\) left/,
+            /# next: \d+ more line\(s\) · outline\(action="show", path="src", query="engine::attention_block", limit=400, offset=\d+\) · source line, resumable with read/u,
         );
-        expect(result.text).toContain("# … truncated 51 line(s)");
-        expect(result.text).toContain("raise limit to fit more per call");
     });
 
     it("keeps the header single-line when only one symbol was asked for", async () => {

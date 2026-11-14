@@ -47,7 +47,9 @@ function semanticRanking(name: string): SemanticSearch {
             const file = request.files[0];
             const declaration = file.all.find((candidate) => candidate.name === name);
 
-            return declaration === undefined ? [] : [{ file, declaration }];
+            return declaration === undefined
+                ? []
+                : [{ file, declaration, score: 0.83, scale: "cosine" }];
         },
     };
 }
@@ -65,6 +67,8 @@ describe("outline search relevance tail", () => {
                     {
                         file,
                         declaration,
+                        score: 0.71,
+                        scale: "cosine",
                         chunk: {
                             index: 2,
                             total: 5,
@@ -100,12 +104,36 @@ describe("outline search relevance tail", () => {
         // "1 match" as proof the identifier exists.
         expect(result.matches).toBe(0);
         expect(result.text).toContain("no literal matches");
-        expect(result.text).toContain("[related]");
+        expect(result.text).toMatch(/\[related \d+%\]/u);
         expect(result.text).toContain("1 related guess");
-        expect(result.text).toContain(
-            "# related: ranked by term overlap and, when the embedding index is warm, similarity",
-        );
+        expect(result.text).toContain("# related: guesses, not matches · % = similarity");
         expect(result.text).toContain("# semantic: enable semantic search");
+    });
+
+    it("prints an embedding cosine as itself, not as a share of the best row", async () => {
+        const semantic: SemanticSearch = {
+            hint: undefined,
+            dispose: () => undefined,
+            async rank(request) {
+                const file = request.files[0]!;
+                const [first, second] = file.all;
+
+                return [
+                    { file, declaration: first!, score: 0.71, scale: "cosine" },
+                    { file, declaration: second!, score: 0.55, scale: "cosine" },
+                ];
+            },
+        };
+        const result = await runSearch(
+            source(),
+            { action: "search", path: "src", query: "lifetime policy" },
+            undefined,
+            semantic,
+        );
+
+        // A cosine is already 0-1, so a relative share would inflate 0.55 into 77%.
+        expect(result.text).toContain("[related 71%]");
+        expect(result.text).toContain("[related 55%]");
     });
 
     it("says the default scan skipped ignored paths when only guesses came back", async () => {
@@ -129,7 +157,7 @@ describe("outline search relevance tail", () => {
             semanticRanking("promote"),
         );
 
-        expect(result.text).not.toContain("[related]");
+        expect(result.text).not.toMatch(/\[related/u);
         expect(result.text).not.toContain("# related:");
     });
 
@@ -143,7 +171,7 @@ describe("outline search relevance tail", () => {
 
         expect(result.text).toContain("adapterForLanguage");
         expect(result.text).toContain("~1");
-        expect(result.text).not.toContain("[related]");
+        expect(result.text).not.toMatch(/\[related/u);
     });
 
     it("keeps a doc match first and appends the tail after it", async () => {
@@ -170,8 +198,8 @@ describe("outline search relevance tail", () => {
         expect(result.text).toContain("promote");
         expect(result.text).toContain("[doc]");
         expect(rankingCalls).toBe(1);
-        expect(result.text).toContain("[related]");
-        expect(result.text.indexOf("[doc]")).toBeLessThan(result.text.indexOf("[related]"));
+        expect(result.text).toMatch(/\[related \d+%\]/u);
+        expect(result.text.indexOf("[doc]")).toBeLessThan(result.text.indexOf("[related"));
     });
 
     it("leads with related rows when the doc tier only saw the words somewhere", async () => {
@@ -197,7 +225,7 @@ describe("outline search relevance tail", () => {
 
         expect(seen).toEqual([true]);
         expect(rows[0]).toContain("other");
-        expect(rows[0]).toContain("[related]");
+        expect(rows[0]).toMatch(/\[related \d+%\]/u);
         expect(rows.findIndex((line) => line.includes("promote"))).toBeGreaterThan(0);
     });
 
@@ -224,7 +252,7 @@ describe("outline search relevance tail", () => {
         // The name tier renders without a tag; what matters is that it still leads the related row.
         const rows = result.text.split("\n");
         const promoted = rows.findIndex((line) => line.includes("promote"));
-        const related = rows.findIndex((line) => line.includes("[related]"));
+        const related = rows.findIndex((line) => line.includes("[related"));
 
         expect(promoted).toBeGreaterThanOrEqual(0);
         expect(related).toBeGreaterThan(promoted);
@@ -240,7 +268,7 @@ describe("outline search relevance tail", () => {
         const promotes = result.text.split("\n").filter((line) => line.includes("promote"));
 
         expect(promotes).toHaveLength(1);
-        expect(promotes[0]).toContain("[related]");
+        expect(promotes[0]).toMatch(/\[related \d+%\]/u);
     });
 
     it("does not add a hint when the tail produced nothing", async () => {
@@ -251,7 +279,7 @@ describe("outline search relevance tail", () => {
         });
 
         expect(result.text).not.toContain("# semantic:");
-        expect(result.text).not.toContain("[related]");
+        expect(result.text).not.toMatch(/\[related/u);
     });
 });
 
@@ -285,7 +313,12 @@ describe("outline search related-led page", () => {
                     candidate.path.endsWith("related.ts"),
                 )!;
 
-                return file.all.map((declaration) => ({ file, declaration }));
+                return file.all.map((declaration, index) => ({
+                    file,
+                    declaration,
+                    score: 1 / (index + 1),
+                    scale: "rrf" as const,
+                }));
             },
         };
         const result = await runSearch(
@@ -300,11 +333,34 @@ describe("outline search related-led page", () => {
         expect(literal).toBeGreaterThanOrEqual(0);
         expect(weakest).toBeGreaterThanOrEqual(0);
         expect(literal).toBeLessThan(weakest);
-        expect(result.text).toContain("[related]");
+        expect(result.text).toMatch(/\[related \d+%\]/u);
+        // The percentage is of the best guess in this result: the top-ranked row is 100%, the eighth is not.
+        expect(result.text).toContain("[related 100%]");
+        expect(result.text).toMatch(/\[related (?:[1-9]|[1-9]\d)%\]/u);
         // The order is a measured decision, but a literal row below the guesses is never silent.
         expect(result.text).toContain(
             "# also: literal row follows the related guesses · src/hint.ts:2-4",
         );
+    });
+
+    it("does not promise related guesses when the tail came back empty", async () => {
+        const empty: SemanticSearch = {
+            hint: undefined,
+            dispose: () => undefined,
+            async rank() {
+                return [];
+            },
+        };
+        const result = await runSearch(
+            slotSource(),
+            { action: "search", path: "src", query: "cache alive" },
+            undefined,
+            empty,
+        );
+
+        // The same page with no guesses: "literal rows follow the related guesses" would name rows that do not exist.
+        expect(result.text).not.toContain("# also:");
+        expect(result.text).not.toContain("[related");
     });
 });
 

@@ -10,6 +10,7 @@ import {
     filterNote,
     isDefinitionTagged,
     nextOffsetNote,
+    parseErrorNote,
     renderWithinBudget,
     scopeLabel,
 } from "./format";
@@ -187,31 +188,15 @@ export async function runDigest(
     }
 
     // A kind filter must not degrade to the directory map: the caller asked for declarations of one kind, and a map of
-    // directory names answers a different question. Page the flat list instead, so `# next: offset=N` continues it.
+    // directory names answers a different question. Page the flat list instead, so the `# next:` call continues it.
     if (!fits && !discovery.rootIsFile && kind === undefined) {
         const map = renderDirectoryMap(source, root, parsed, limit, scope);
 
         if (map !== undefined) {
-            if (offset === 0) {
-                return {
-                    text: bodyThenFooter([map], [footer]),
-                    files: parsed.length,
-                    parseErrors,
-                    truncated: true,
-                };
-            }
-
-            const mapLines = map.split("\n");
-            const fitted = renderWithinBudget(
-                mapLines[0] ?? "",
-                [mapLines.slice(1).join("\n")],
-                limit,
-                offset,
-            );
-            const next = nextOffsetNote(fitted);
-
+            // A map is a summary, not a list: paging it yields one directory per call, and the legend alone can fill
+            // a small page. It is bounded by the tree's directory count, so it is always returned whole.
             return {
-                text: bodyThenFooter([fitted.text], [next, footer]),
+                text: bodyThenFooter([map], [footer]),
                 files: parsed.length,
                 parseErrors,
                 truncated: true,
@@ -220,7 +205,7 @@ export async function runDigest(
     }
 
     const fitted = renderWithinBudget(header, [fullBody], limit, offset);
-    const next = nextOffsetNote(fitted);
+    const next = nextOffsetNote(fitted, params);
 
     return {
         text: bodyThenFooter([fitted.text], [next, footer, visibilityNote, signaturesNote]),
@@ -566,9 +551,7 @@ function digestFooter(
     }
 
     if (parseErrors > 0) {
-        notes.push(
-            `# parse: ${parseErrors} error node(s); declarations still shown where possible`,
-        );
+        notes.push(parseErrorNote(parseErrors, "some declarations may be missing"));
     }
 
     if (notes.length === 0) {

@@ -146,7 +146,7 @@ describe("outline deps", () => {
             path: "src/a.ts",
             limit: 600,
         });
-        const next = /# next: offset=(\d+)/.exec(page.text)?.[1];
+        const next = /offset=(\d+)\)/u.exec(page.text)?.[1];
 
         expect(next).toBeDefined();
 
@@ -157,8 +157,8 @@ describe("outline deps", () => {
             offset: Number(next),
         });
 
-        // Rows with no heading read as top-level lines; the heading is reprinted on the page that lost it.
-        expect(continuation.text).toMatch(/\nimports\n/);
+        // A page that starts inside the import block continues its rows; there is no heading to reprint.
+        expect(continuation.text).toMatch(/local\s+\.\/m\d+\s+:\d+\s+→ src\/m\d+\.ts/u);
     });
 });
 

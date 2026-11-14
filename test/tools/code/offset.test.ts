@@ -40,7 +40,7 @@ function source(): MemoryCodeSource {
 }
 
 function nextOffset(text: string): number | undefined {
-    const match = /# next: offset=(\d+)/u.exec(text);
+    const match = /offset=(\d+)\)/u.exec(text);
 
     return match === null ? undefined : Number(match[1]);
 }
@@ -71,21 +71,20 @@ beforeEach(() => {
 });
 
 describe("outline output offsets", () => {
-    it("joins whole blocks and points at the first omitted block", () => {
-        const limit = "H".length + "a\nb".length + 1;
-        const first = renderWithinBudget("H", ["a\nb", "c\nd"], limit);
+    it("pages by rendered line across block boundaries", () => {
+        const blocks = ["a\nb", "c\nd"];
+        const first = renderWithinBudget("H", blocks, 7);
 
-        expect(first.truncated).toBe(true);
+        expect(first.total).toBe(5);
         expect(first.nextOffset).toBe(3);
-        expect(first.text).toContain("a\nb");
-        expect(first.text).toContain("# omitted 1 more block(s)");
+        expect(first.remaining).toBe(2);
+        expect(first.text).toBe("H\n\na\nb");
 
-        const second = renderWithinBudget("H", ["a\nb", "c\nd"], limit, first.nextOffset);
+        const second = renderWithinBudget("H", blocks, 7, first.nextOffset);
 
-        expect(second.truncated).toBe(true);
+        expect(second.text).toBe("H\n\nc\nd");
         expect(second.nextOffset).toBeUndefined();
-        expect(second.text).toContain("c\nd");
-        expect(second.text).not.toContain("a\nb");
+        expect(second.truncated).toBe(true);
     });
 
     it("resumes inside one oversized block", () => {
@@ -103,11 +102,37 @@ describe("outline output offsets", () => {
         expect(second.text).not.toContain("line_0\n");
     });
 
+    it("reprints a block's heading when a page starts inside it", () => {
+        const blocks = ["head\nr1\nr2\nr3", "second\nx1"];
+        const first = renderWithinBudget("H", blocks, 12, 0, { headings: true });
+
+        expect(first.nextOffset).toBe(2);
+        expect(first.text).toBe("H\n\nhead\nr1");
+
+        const second = renderWithinBudget("H", blocks, 12, first.nextOffset ?? 0, {
+            headings: true,
+        });
+
+        // Without the reprint the continuation would open on `r2` with nothing saying which group it is in.
+        expect(second.text.split("\n")[2]).toBe("head");
+        expect(second.text).toContain("r2");
+    });
+
+    it("moves a heading to the next page instead of ending a page on it", () => {
+        const blocks = ["a1\na2", "b1\nb2"];
+
+        expect(renderWithinBudget("H", blocks, 10, 0, { headings: true }).text).toBe("H\n\na1\na2");
+
+        const second = renderWithinBudget("H", blocks, 10, 3, { headings: true });
+
+        expect(second.text).toBe("H\n\nb1\nb2");
+    });
+
     it("reports the limit needed when a line cannot fit", () => {
         const result = renderWithinBudget("H", ["x".repeat(200)], 2);
 
         expect(result.text).toContain(
-            "# … the next block needs about 202 chars; raise limit to at least 202 to show it, or continue with offset=",
+            "# the next line needs about 204 chars; raise limit to at least 204",
         );
         expect(result.nextOffset).toBeUndefined();
     });
@@ -176,7 +201,7 @@ describe("outline output offsets", () => {
         });
         const offset = nextOffset(first.text);
 
-        expect(first.text).toContain("(source line)");
+        expect(first.text).toContain("source line, resumable with read");
         expect(offset).toBeGreaterThan(1);
         // `void big_function() {` is line 1, so `int value_N` is source line N + 2.
         expect(offset).toBeLessThanOrEqual(122);
@@ -193,7 +218,7 @@ describe("outline output offsets", () => {
         expect(resumed.text).toContain(`int value_${(offset ?? 0) - 2} = `);
     });
 
-    it("keeps body-line offsets when a show result spans two files", async () => {
+    it("keeps a rendered-line offset when a show result spans two files", async () => {
         const twoFiles = new MemoryCodeSource("/project", {
             "a.hpp": "void connect(int port);\n",
             "b.cpp": [
@@ -211,9 +236,9 @@ describe("outline output offsets", () => {
             limit: 400,
         });
 
-        // A source line cannot say which of the two files it is in, so the older body-line contract stands.
-        expect(result.text).toMatch(/# next: offset=\d+/);
-        expect(result.text).not.toContain("(source line)");
+        // A source line cannot say which of the two files it is in, so the call carries a rendered-line offset.
+        expect(result.text).toMatch(/outline\(action="show".*offset=\d+\)/u);
+        expect(result.text).not.toContain("source line");
 
         const resumed = await runShow(twoFiles, {
             action: "show",
@@ -224,7 +249,14 @@ describe("outline output offsets", () => {
             offset: nextOffset(result.text) ?? 0,
         });
 
-        expect(resumed.text).toContain("int value_0 = 0;");
+        // The continuation starts at the exact line the first page stopped before, not at the block start.
+        const shown = [...result.text.matchAll(/int value_(\d+) = /gu)].map((match) =>
+            Number(match[1]),
+        );
+        const lastShown = shown.at(-1) ?? 0;
+
+        expect(resumed.text).toContain(`int value_${lastShown + 1} = ${lastShown + 1};`);
+        expect(resumed.text).not.toContain("int value_0 = 0;");
     });
 
     it("keeps blank lines so a source-line offset maps one-to-one", async () => {
@@ -257,6 +289,38 @@ describe("outline output offsets", () => {
         });
 
         expect(resumed.text).toContain(lines.slice(offset - 1, offset + 2).join("\n"));
+    });
+
+    it("keeps paging forward when the budget fits only a declaration header", async () => {
+        // The same path and symbol names as the case that looped: the tool header and its index lines leave room for
+        // a declaration header and nothing else.
+        const fixture = new MemoryCodeSource("/project", {
+            "src/tools/code/format.ts": [
+                "export function shortSignature(signature: string, limit = 240): string {",
+                "    return signature;",
+                "}",
+                "",
+                "export function shortLine(text: string, limit = 180): string {",
+                "    return text;",
+                "}",
+            ].join("\n"),
+        });
+        const text = await collectPages(async (offset) => {
+            const result = await runShow(fixture, {
+                action: "show",
+                path: "src/tools/code/format.ts",
+                query: "shortLine, shortSignature",
+                limit: 250,
+                offset,
+            });
+
+            return result.text;
+        });
+
+        // A `# next` naming the declaration's own source line mapped back to the block start, so the header-only page
+        // replayed itself forever and no body was ever reached.
+        expect(text).toContain("return text;");
+        expect(text).toContain("return signature;");
     });
 
     it("pages a show body to the end", async () => {

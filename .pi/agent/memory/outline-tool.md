@@ -33,7 +33,8 @@ Registered from `src/index.ts`; design notes: `src/tools/code/README.md`.
 ## Defaults
 
 4,000-character `limit`, 1 MB file cap, 2k mapped files, and build/out/cmake-build/third_party/generated ignored.
-Cuts are resumable: every action takes `offset` in rendered body lines and a cut ends `# next: offset=N`. Details,
+Cuts are resumable: every action takes `offset` in rendered lines, and a cut ends with one `# next:` line holding the
+count left plus the complete `outline(…)` call that continues it. Only `show` offsets a source line. Details,
 including `[huge]` files, the directory map, and heading matching: `outline-tool/actions.md`.
 
 ## Targeted references

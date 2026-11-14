@@ -15,6 +15,7 @@ import {
     discoveryCapNote,
     filterNote,
     nextOffsetNote,
+    parseErrorNote,
     renderWithinBudget,
     scopeLabel,
     shortLine,
@@ -159,7 +160,7 @@ export async function runUsages(
         return {
             text: bodyThenFooter(
                 [
-                    `# no usages found for ${requested.join(", ")} in ${scopeLabel(scope)} · ${target.pattern === undefined ? "no supported files" : "no files match"}`,
+                    `# no usages found for ${requested.join(", ")} in ${scopeLabel(scope)}${target.pattern === undefined ? "" : " · no files match"}`,
                 ],
                 [
                     defaultScopeNote(params.path),
@@ -237,6 +238,7 @@ export async function runUsages(
                 parseErrors,
                 scope,
                 defaultScopeNote(params.path),
+                requested.length > 1,
             ),
         );
     }
@@ -244,8 +246,8 @@ export async function runUsages(
     if (sections.length === 1) {
         const section = sections[0] ?? "";
         const [header = "", ...blocks] = section.split("\n\n");
-        const fitted = renderWithinBudget(header, blocks, limit, offset);
-        const next = nextOffsetNote(fitted);
+        const fitted = renderWithinBudget(header, blocks, limit, offset, { headings: true });
+        const next = nextOffsetNote(fitted, params);
 
         return {
             text: bodyThenFooter(
@@ -260,8 +262,12 @@ export async function runUsages(
     }
 
     const header = `# usages ${requested.join(", ")} · ${languages} · syntactic (name-based)`;
-    const fitted = renderWithinBudget(header, sections, limit, offset);
-    const next = nextOffsetNote(fitted);
+    // One block per paragraph, not per symbol: the symbol title and each file group then get their own heading, so a
+    // continuation inside a file reprints its path instead of resuming on a bare row. The blank lines are already in
+    // the sections, so the page reads exactly as before.
+    const blocks = sections.flatMap((section) => section.split("\n\n"));
+    const fitted = renderWithinBudget(header, blocks, limit, offset, { headings: true });
+    const next = nextOffsetNote(fitted, params);
 
     return {
         text: bodyThenFooter(
@@ -657,14 +663,21 @@ function renderSection(
     languages: string,
     parseErrors: number,
     rootDisplay: string,
-    scopeNote?: string,
+    scopeNote: string | undefined,
+    compact: boolean,
 ): string {
+    // One symbol per section under a shared page header: the page already names every requested symbol and the
+    // language, so repeating `# usages … typescript · syntactic` per section just says it twice. The symbol and its
+    // count stay, because that is what differs between sections — and it is the block heading a continuation reprints.
+    const title = ` · ${matchCount(collected.total)}${lineNote(collected)}`;
     const headerNotes = [
-        `# usages ${raw} · ${collected.total} matches${lineNote(collected)} · ${languages} · syntactic (name-based)`,
+        compact
+            ? `${raw}${title}`
+            : `# usages ${raw}${title} · ${languages} · syntactic (name-based)`,
     ];
 
     if (parseErrors > 0) {
-        headerNotes.push(`# parse: ${parseErrors} error node(s)`);
+        headerNotes.push(parseErrorNote(parseErrors, "some occurrences may be missing"));
     }
 
     if (collected.files.length === 0) {
@@ -687,6 +700,12 @@ function renderSection(
         collected.files.some((file) => file.scopes.some((scope) => !scope.matchedType));
 
     for (const file of collected.files) {
+        // A blank line makes each file a block: a page that resumes inside one can reprint its path, and the
+        // grouping is visible in the output as well as in the pager.
+        if (body.length > 0) {
+            body.push("");
+        }
+
         body.push(source.displayPath(file.path));
 
         for (const scope of file.scopes) {
@@ -714,6 +733,11 @@ function renderSection(
         .join("\n\n");
 
     return bodyThenFooter([page], notes);
+}
+
+/** "1 match" is the only irregular case here; `counted` would produce "matchs". */
+function matchCount(total: number): string {
+    return total === 1 ? "1 match" : `${total} matches`;
 }
 
 /**

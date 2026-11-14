@@ -35,6 +35,7 @@ import { tokenize } from "./semantic/bm25";
 import { stem } from "./stem";
 import type { CodeChunk } from "./semantic/chunks";
 import { TAIL_ROWS, declarationKey, leadsWithRelated, rankKeyOf } from "./semantic/rank";
+import type { RankScale } from "./semantic/rank";
 import type { SemanticSearch } from "./semantic/types";
 import type { CodeSource } from "./source";
 import { declarationDoc, normalizeText } from "./text";
@@ -130,6 +131,15 @@ interface SearchHit {
     tier: number;
     /** Present only for approximate results. */
     distance?: number;
+    /**
+     * The confidence of a related row: its ranker score as an integer percentage of the best row in this result.
+     *
+     * The channels do not share a scale — a cosine is 0-1, BM25 is unbounded, and a fused RRF sum is around 0.02 —
+     * so one rule is applied to all three: the best guess on the page is 100% and the rest are proportional. It says
+     * how close a row is to the best guess, not how likely it is to be right. Absent on every exact channel, which
+     * matched or did not.
+     */
+    confidence?: number;
     /** Present for body-text and comment rows: where the text sits, and how often it occurs. */
     body?: { line: number; text: string; count: number };
     /** Present when a body chunk produced the similarity score, so the row can name the span that matched. */
@@ -358,7 +368,7 @@ export async function runSearch(
     // A related row is a guess ranked by similarity, so it must not be counted as a match: "3 matches" over three
     // guesses is the one number in this output an agent will repeat as a fact.
     const literalTotal = hits.filter((hit) => hit.tier !== TIER_RELATED).length;
-    const displaced = displacedNote(source, leads, hits, literalTotal);
+    const displaced = displacedNote(source, leads, related.length, hits, literalTotal);
     const approximate = fuzzyHits.length > 0;
     const filter = filterNote({
         path: target.pattern,
@@ -402,9 +412,19 @@ export async function runSearch(
         commentMatches,
         related.length,
     );
-    const rows = hits.map((hit) => renderHit(source, hit));
-    const body = rows.join("\n");
-    const fitted = renderWithinBudget(header, [body], limit, offset);
+    const rows = hits.map((hit) => ({
+        text: renderHit(hit),
+        path: source.displayPath(hit.file.path),
+    }));
+    const body = groupBlocks(rows);
+    const fitted = renderWithinBudget(header, body.blocks, limit, offset, { headings: true });
+    const pageEnd = fitted.nextOffset ?? Number.POSITIVE_INFINITY;
+    const relatedVisible = rows.some(
+        (_, index) =>
+            hits[index]?.tier === TIER_RELATED &&
+            (body.starts[index] ?? -1) >= fitted.offset &&
+            (body.starts[index] ?? -1) < pageEnd,
+    );
     const footer = footerFor({
         approximate,
         query,
@@ -412,6 +432,7 @@ export async function runSearch(
         shown: total,
         approximateTotal: fuzzy?.total ?? 0,
         relatedMatches: related.length,
+        relatedVisible,
         bodyMatches: bodyMatches,
         bodyWithheld,
         commentMatches,
@@ -419,10 +440,10 @@ export async function runSearch(
         displacedLiteral: displaced,
         filter,
         within,
-        more: moreNote(source, hits, rows, fitted),
+        more: moreNote(rows, body.starts, fitted),
     });
     const hint = related.length > 0 && semantic?.hint !== undefined ? [semantic.hint] : [];
-    const next = nextOffsetNote(fitted);
+    const next = nextOffsetNote(fitted, params);
     // Related rows are guesses, not matches: a search with no literal row still needs to say that the default scan
     // skipped ignored paths, or the guesses read as the whole answer.
     const scopeNote = scopeNoteFor(params, literalTotal);
@@ -714,6 +735,7 @@ async function collectRelated(
         signal,
     );
     const tail: SearchHit[] = [];
+    const best = ranked[0]?.score ?? 0;
 
     for (const entry of ranked) {
         const key = rankKeyOf(entry);
@@ -729,6 +751,7 @@ async function collectRelated(
             comment: entry.comment,
             tier: TIER_RELATED,
             chunk: entry.chunk,
+            confidence: confidencePercent(entry.score, best, entry.scale),
         });
 
         if (tail.length >= TAIL_ROWS) {
@@ -878,8 +901,57 @@ function hitRange(hit: SearchHit): string {
     return hit.declaration === undefined ? "" : lineRange(hit.declaration.range);
 }
 
-function renderHit(source: CodeSource, hit: SearchHit): string {
-    const location = `${source.displayPath(hit.file.path)}:${hitRange(hit)}`;
+/**
+ * One rendered row and the file it came from.
+ *
+ * The path is carried beside the text rather than inside it: a search names the same file on almost every row, so
+ * the path is printed once as a heading and the rows are its subitems.
+ */
+interface RenderedRow {
+    text: string;
+    path: string;
+}
+
+/** The page body: one block per file, its path as the first line and its rows indented under it. */
+function groupBlocks(rows: readonly RenderedRow[]): { blocks: string[]; starts: number[] } {
+    const blocks: string[] = [];
+    const starts: number[] = [];
+    let current: string | undefined;
+    let blockStart = 0;
+    let lines: string[] = [];
+
+    // Blocks are separated by a blank line, so `flattenBlocks` advances a block start by its line count plus one.
+    const flush = (): void => {
+        if (lines.length === 0) {
+            return;
+        }
+
+        blocks.push(lines.join("\n"));
+        blockStart += lines.length + 1;
+        lines = [];
+    };
+
+    for (const row of rows) {
+        if (row.path !== current) {
+            flush();
+            current = row.path;
+            lines.push(row.path);
+        }
+
+        starts.push(blockStart + lines.length);
+
+        for (const line of row.text.split("\n")) {
+            lines.push(`  ${line}`);
+        }
+    }
+
+    flush();
+
+    return { blocks, starts };
+}
+
+function renderHit(hit: SearchHit): string {
+    const location = `:${hitRange(hit)}`;
 
     // A comment row names a block of prose that `show` cannot return, so it prints its own range and evidence inside
     // it: a bare `comment :1-9` would tell a caller where to look but not whether it is worth the read.
@@ -949,6 +1021,16 @@ function rowColumns(declaration: Declaration, location: string): string[] {
     const signature =
         declaration.kind === "frontmatter" ? "" : shortSignature(declaration.signature, 240);
 
+    // A heading's literal text is its name. `Parent::Parent::Child` repeats a chain a digest map already shows by
+    // indentation, and the signature column prints the heading itself, so the chain is dropped rather than said twice.
+    if (declaration.kind === "heading") {
+        return [
+            location,
+            kindLabel(declaration.kind),
+            signature.length > 0 ? signature : declaration.qualifiedName,
+        ];
+    }
+
     return [location, kindLabel(declaration.kind), declaration.qualifiedName, signature];
 }
 
@@ -962,10 +1044,13 @@ function rowColumns(declaration: Declaration, location: string): string[] {
 function displacedNote(
     source: CodeSource,
     leads: boolean,
+    relatedTotal: number,
     hits: readonly SearchHit[],
     literalTotal: number,
 ): string | undefined {
-    if (!leads || literalTotal === 0) {
+    // "Literal rows follow the related guesses" is false when the tail came back empty — a prose query does that
+    // whenever every candidate falls below the floor — and a note about guesses the page cannot show is noise.
+    if (!leads || relatedTotal === 0 || literalTotal === 0) {
         return undefined;
     }
 
@@ -999,8 +1084,13 @@ function displacedLiteral(
     }
 
     const label = declaration.blockCallee ?? kindLabel(declaration.kind);
+    // The same rule the row follows: a heading is named by its literal text, not by the chain it sits under.
+    const name =
+        declaration.kind === "heading" && declaration.signature.length > 0
+            ? declaration.signature
+            : declaration.qualifiedName;
 
-    return `# also: ${noun} the related guesses · ${where} ${label} ${declaration.qualifiedName}${channelTag(first)}`;
+    return `# also: ${noun} the related guesses · ${where} ${label} ${name}${channelTag(first)}`;
 }
 
 /**
@@ -1072,10 +1162,12 @@ function hasDeclaration(hit: SearchHit): hit is SearchHit & { declaration: Decla
 }
 
 function channelTag(hit: SearchHit): string {
+    const related = `[related${scoreLabel(hit)}]`;
+
     if (hit.comment !== undefined) {
         // The row's kind column already says `comment`, so only the guess tag is left to add: a block reached by
         // similarity is still a guess, and the "guesses are not matches" rule has to hold.
-        return hit.tier === TIER_RELATED ? " [related]" : "";
+        return hit.tier === TIER_RELATED ? ` ${related}` : "";
     }
 
     if (hit.declaration?.kind === "frontmatter" && isDocTier(hit.tier)) {
@@ -1090,7 +1182,30 @@ function channelTag(hit: SearchHit): string {
         return " [body]";
     }
 
-    return hit.tier === TIER_RELATED ? " [related]" : "";
+    return hit.tier === TIER_RELATED ? ` ${related}` : "";
+}
+
+/**
+ * The ranked channel's score, on the tag of the row it placed.
+ *
+ * A bare `[related]` says the row is a guess but not whether it is the best guess or the last one over the floor.
+ * Three significant digits keep a fused RRF sum (`0.0167`) and a BM25 score (`12.4`) both readable.
+ */
+/**
+ * A ranker score as an integer percentage on the row.
+ *
+ * The embedding channel's cosine is already 0-1, so its percentage is the score itself and 71% means 0.71 of
+ * similarity. BM25 is unbounded and a fused RRF sum sits near 0.02, so those two are divided by the best row in the
+ * same result: 100% means "best guess here", not "certain".
+ */
+function confidencePercent(score: number, best: number, scale: RankScale): number {
+    const value = scale === "cosine" ? score * 100 : best > 0 ? (score / best) * 100 : 0;
+
+    return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function scoreLabel(hit: SearchHit): string {
+    return hit.confidence === undefined ? "" : ` ${hit.confidence}%`;
 }
 
 function declarationTag(declaration: Declaration): string {
@@ -1205,6 +1320,8 @@ function footerFor(options: {
     shown: number;
     approximateTotal: number;
     relatedMatches: number;
+    /** Whether a related row is on this page: a legend for rows the page does not show is noise. */
+    relatedVisible: boolean;
     bodyMatches: number;
     bodyWithheld: number;
     commentMatches: number;
@@ -1216,9 +1333,9 @@ function footerFor(options: {
 }): string[] {
     const footer: string[] = [];
 
-    if (options.relatedMatches > 0) {
+    if (options.relatedMatches > 0 && options.relatedVisible) {
         footer.push(
-            "# related: ranked by term overlap and, when the embedding index is warm, similarity — not by name or doc comment; a §i/n :start-end line names the body chunk that matched · outline show to confirm",
+            "# related: guesses, not matches · % = similarity (embedding) or share of the best guess (BM25/fused) · §i/n :start-end = matched chunk",
         );
     }
 
@@ -1292,33 +1409,41 @@ function counted(count: number, noun: string): string {
 }
 
 /**
- * Name what a cut page left behind.
+ * Name the file the next page resumes in, when it is not the file this page ended on.
  *
- * A row-paged result used to end at `# next: offset=N` with no hint that the best match — the file whose *section*
- * answered the question — was on the next page. Naming the next row's file is enough to tell a caller to keep
- * reading instead of reformulating the query.
+ * A row-paged result used to end at the offset with no hint that the best match — the file whose *section* answered
+ * the question — was on the next page. The line count is not repeated here: `# next:` already carries it, and two
+ * counters a line apart read as two different remaining amounts. The row starts are exact line indices, so this
+ * does not guess from the rendered text.
  */
 function moreNote(
-    source: CodeSource,
-    hits: readonly SearchHit[],
-    rows: readonly string[],
+    rows: readonly RenderedRow[],
+    starts: readonly number[],
     fitted: BudgetedText,
 ): string | undefined {
-    const onPage = new Set(fitted.text.split("\n"));
-    // A body row carries an evidence line under the match, so only its first line is the row's identity.
-    const firstLine = (row: string): string => row.split("\n")[0] ?? row;
-    const firstUnseen = rows.findIndex((row) => !onPage.has(firstLine(row)));
+    const end = fitted.nextOffset;
 
-    if (firstUnseen < 0) {
+    if (end === undefined) {
         return undefined;
     }
 
-    const unseen = rows.filter((row) => !onPage.has(firstLine(row))).length;
-    const next = hits[firstUnseen];
-    const where = next === undefined ? "" : `, next in ${source.displayPath(next.file.path)}`;
+    const firstUnseen = starts.findIndex((start) => start >= end);
+    const lastShown = firstUnseen - 1;
 
-    // "rows", not "matches": with related guesses on the page a match count here contradicts the header.
-    return `# more: ${unseen} of ${rows.length} row(s) on later pages${where}`;
+    if (firstUnseen < 0 || lastShown < 0) {
+        return undefined;
+    }
+
+    // The signal is "content from another file is still unread", not "the cut landed exactly between two files":
+    // a page boundary inside a long first file would otherwise never mention the file behind it.
+    const shownPath = rows[lastShown]?.path;
+    const crossing = rows.slice(firstUnseen).find((row) => row.path !== shownPath);
+
+    if (crossing === undefined) {
+        return undefined;
+    }
+
+    return `# more: later rows continue in ${crossing.path}`;
 }
 
 function languagesOf(files: readonly ParsedFile[]): string {

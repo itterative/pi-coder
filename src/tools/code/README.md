@@ -8,7 +8,8 @@ One agent-facing tool, `outline`, with six actions:
   conservative typo fallback.
 - `show` — exact source for named symbols; a directory target pairs header declarations with source definitions.
 - `usages` — syntactic occurrences with `[def]` / `[decl]` / `[call]` / `[ref]` tags, plus `[launch]` for
-  HIP/CUDA kernel launches.
+  HIP/CUDA kernel launches. Several requested symbols share one page header and appear as `<symbol> · N matches`
+  subheadings, which is also the heading a continuation reprints.
 - `deps` — one file's imports and the files that import it, file-level and syntactic.
 - `flow` — the call sites of a file or a scope, grouped by the scope that owns them, in source order.
 
@@ -298,10 +299,15 @@ test/suites.test.ts  · 8 call sites · 6 scopes
 fragments — and reports **the declaration that contains it**, not the line. Those rows carry `[body]`, rank below
 `[doc]` and above `[related]`, and print one evidence line, with `×N` when the text occurs more than once:
 
-    src/store/artifact.ts:1-8  function  download  ...  [def] [body]
-      :6  throw new Error(`${spec} failed its checksum`);
-    test/deps.test.ts:49-63  it  "separates local, external, and unresolved imports"  (outline deps)
-      :56  expect(result.text).toContain("4 imports");  ×2
+    src/store/artifact.ts
+      :1-8  function  download  ...  [def] [body]
+        :6  throw new Error(`${spec} failed its checksum`);
+    test/deps.test.ts
+      :49-63  it  "separates local, external, and unresolved imports"  (outline deps)
+        :56  expect(result.text).toContain("4 imports");  ×2
+
+Rows are grouped by file: the path is a heading printed once, and every row under it is a `path:range` subitem with
+the `:` range aligned in one column, so a file named on ten rows costs one line instead of ten.
 
 ### Comment blocks
 
@@ -319,7 +325,9 @@ wants, and the footer says so. A kind filter suppresses them, because a comment 
 
 The channel is literal *and* semantic: each block also gets a vector keyed by its text (`commentEntriesOf` in
 `semantic/index.ts`), so a paraphrase lands on a file whose own header answers it. A block reached only by
-similarity is tagged `[related]` — a guess, never counted as a match. Doc comments are not duplicated this way: they
+similarity is tagged `[related 73%]` — a guess, never counted as a match, with its confidence as an integer
+percentage: the cosine for an embedding row, a share of the best guess for a BM25 or fused row. Doc comments are not
+duplicated this way: they
 are already embedded in the head vector of the declaration that owns them, and counted as `[doc]` rows.
 
 Three rules keep the body channel from becoming a second grep:
@@ -442,16 +450,20 @@ costs what `usages` costs, and imports are cached per `ParsedFile` so an edited 
   173-file directory cannot exhaust the budget before a 10-file one has been named; a list that had to stop says
   `# … N more`, and `(0)` is omitted because a file with no declarations is still a file. The footer names the shape
   (`# names: file (declarations) · dir/ files`), and `# deeper:` offers the three largest directories to open next.
-  It is deliberately not `# next:`, the truncation marker, so a complete map never reads as shortened. The header
+  It is deliberately not `# next:`, the truncation marker, so a complete map never reads as shortened: the map is a
+  summary bounded by the tree's directory count, never paged, and an `offset` into it is ignored rather than answered
+  with one directory per call. The header
   says why the map replaced the declarations (`declarations exceed the N-char limit; showing the map`).
-- **Paging.** A cut result ends with `# next: offset=N` *and* how many body lines remain, because the step between
-  pages is set by the character budget rather than a line count: `# next: offset=19 · 111 of 130 line(s) left · raise
-  limit to fit more per call`. `show` is the one action whose offset is a **source line**, not a body line: its note
-  reads `offset=550 of src/x.cpp (source line)`, and both the number and the file can be handed to
-  `read path=src/x.cpp offset=550` unchanged. When a page stops inside a block, `# omitted N more block(s) after this
-  body` names the blocks it never reached, and a multi-symbol `show` prints one index line per resolved symbol before
-  any body, so a cut body cannot make a symbol look missing. For a body over roughly 40 lines, the cheaper path is the
-  span: every header carries `path:start-end`, and `read offset=start limit=n` fetches it in one call.
+- **Paging.** A cut result ends with one line, `# next: N more line(s) · outline(action=…, offset=…)`: the count is
+  in rendered lines, and the call is complete, so pasting it continues the same question instead of re-deriving the
+  parameters. The character `limit` sets the page size; `offset` is a rendered line, and the blank line between two
+  blocks never starts a page. `show` is the one action whose offset is a **source line**: its note ends
+  `· source line, resumable with read`, and both the number and the file can be handed to
+  `read path=src/x.cpp offset=550` unchanged. A source line cannot name one of two files, and it cannot advance when
+  the requested symbols are not in source order (`show query="late, early"` renders late first), so both cases fall
+  back to a rendered line. A multi-symbol `show` prints one index line per resolved symbol before any body, so a cut
+  body cannot make a symbol look missing. For a body over roughly 40 lines, the cheaper path is the span:
+  every header carries `path:start-end`, and `read offset=start limit=n` fetches it in one call.
 - `show` defaults to `full` for functions/fields and `signatures` for containers; `detail` overrides that.
   Containers in signatures mode show only public members. `show` keeps signatures intact, while digest shortens
   long ones. Extracted source is dedented by the declaration's own indentation so nested members read cleanly;
@@ -552,6 +564,12 @@ agree. Every embedding failure degrades to BM25 only, and the tail never fails t
 identifier typo match (the corrected name is the answer) and a one-character query (a substring request). A warm query
 embedding costs under 100 ms, so there is no longer a cost reason to gate the channel on how little the literal pass
 found.
+
+Every related row prints its confidence as an integer percentage: `[related 73%]`. `ScoredDeclaration` carries the
+`scale` beside the score, because the conversion differs. A cosine is already 0-1, so its percentage is the score
+itself (0.71 → `71%`). BM25 is unbounded and a fused RRF sum sits near 0.02, so those two are divided by the best row
+in the same result — 100% means "best guess here", not "likely to be right" (`confidencePercent` in `search.ts`). An
+exact channel (`[doc]`, `[body]`, a name match) has no percentage, because it either matched or did not.
 
 Measured on an 8-declaration fixture with the real artifacts: the dense channel changed no *rank* that BM25 had not
 already got right (a tail needs only partial term overlap), and its visible effect was filling the tail to
@@ -696,13 +714,11 @@ selection, the index layout, and the measured build cost (~10 ms per vector on a
   declaration boundaries, and honor the caller's abort signal at those boundaries.
 - Defaults: 4,000-character `limit`, 1 MB file cap, 2k-file discovery cap, build/third-party/generated
   directories ignored, and a 2Q parsed-file cache (2,000 entries / 64 MiB) keyed by path + mtime + size.
-- Cut output is resumable. Every action accepts `limit` in characters and `offset` in rendered body lines
-  (the header is repeated, not counted) — except `show`, whose offset is a source line so the continuation is a
-  `read` recipe. A cut result ends with `# next: offset=N`; pass that offset with the same action, path, query, and
-  `limit` to continue. Pages prefer whole declaration/match/section
-  blocks, but can resume inside one oversized block when necessary. An offset beyond the end says so. A single
-  source line longer than `limit` cannot be split by a line offset; that page reports the approximate `limit`
-  needed.
+- Cut output is resumable. Every action accepts `limit` in characters and `offset` in rendered lines (the header is
+  repeated, not counted) — except `show`, whose offset is a source line so the continuation is a `read` recipe. A cut
+  result ends with a `# next:` line carrying the lines left and the complete call that continues it; paste that call
+  to resume. An offset beyond the end says so. A single source line longer than `limit` cannot be split by a line
+  offset; that page reports the approximate `limit` needed.
 - Scanning `.` honors the working tree's `.gitignore`; an explicitly named subdirectory is scanned literally,
   so a fixture under an ignored path still works. The built-in build/third-party list applies either way. A
   zero-hit under that default scope carries `# note: the default scan skips ignored paths (…); pass path= to search

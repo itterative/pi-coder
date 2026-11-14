@@ -103,8 +103,47 @@ instead: `permissions*.ts` used to answer `src/ 1 file · modules/ 1` twice and 
 
 ## Cuts
 
-Cuts are resumable: every action takes `offset` in rendered body lines and a cut ends `# next: offset=N`. The one
-exception is `show`, whose offset is a **source line** so `# next: offset=550 of src/x.cpp (source line)` can be
-passed straight to `read path=src/x.cpp offset=550`; its blocks carry a `sourceStart`/`prelude` map to translate.
-Pages prefer block boundaries but can resume inside an oversized block; a line longer than the limit cannot be
-split, and the page reports the limit needed.
+**Rows are grouped by file.** A search prints the path once as a heading, then its rows as `:range  kind  name`
+subitems indented under it, carrying the same tags. A file named on ten rows used to cost ten full paths; the grouping
+is in `groupBlocks` (`search.ts`), and `renderHit` no longer includes the path at all. The grouping is built as one
+block per file so the pager can reprint a heading. A heading row prints its literal text only (`heading  ## Install`):
+`Parent::Parent::Child` repeated the chain a digest map already shows by indentation, and the signature column said
+the title again. `show` still matches the chain, so the row stays addressable. A related row's score rides on
+the tag (`[related 73%]`: a cosine prints as itself, since it is already 0-1, while BM25 and fused RRF print as a
+share of the best guess in that result). `moreNote` names the file a cut page hid and carries **no count** — `# next:`
+already has the line count, and two counters a line apart read as two different remaining amounts. Its row starts are
+exact line indices from `groupBlocks`, not a text match against the page. The `# related:` legend is suppressed when no
+related row is on the page (a beyond-end offset), so it never explains rows the page does not show; the header count
+stays, because that is a fact about the whole result. The same rule covers `# also:` — it names the literal row the
+related-led page pushed down, so it fires only when the tail is non-empty (`displacedNote` takes `related.length`); a
+prose query whose candidates all fell below the floor has no guesses to "follow", and the note used to promise them
+anyway.
+
+**A continuation reprints the heading it lost.** `renderWithinBudget` treats each block's first line as a heading when
+the caller passes `{ headings: true }`: a page starting inside a block reprints that line, and a cut that would end
+immediately after one moves back a line so the heading leads the next page instead of dangling. Callers opt in because
+only they know whether their blocks lead with a heading — search (per file), usages (per file), deps (per section),
+flow (per file), and show (per declaration) do; digest and raw bodies do not. Trailing separator lines are trimmed
+**after** the retreat, since retreating onto one is what re-exposes it. Multi-symbol `usages` keeps one page header
+and makes each symbol's line a subheading (`<symbol> · N matches`), so the block heading is the symbol rather than a
+second `# usages …` copy; it passes one block per *paragraph* (the subheading, then each file group), so a
+continuation inside a file reprints the file path. `flow` deliberately keeps one block per file: its continuation
+reprints the file header, not the enclosing scope, because per-scope blocks would either add a blank line per scope
+or need a third heading mechanism for a label the next scope supplies anyway. Usages scope labels (`<file scope>`,
+`runDeps`) have the same limit for the same reason.
+
+Cuts are resumable: every action takes `offset` in rendered lines and a cut ends with one `# next:` line carrying
+`N more line(s)` and the complete `outline(…)` call that continues it — paste the call, do not re-derive the
+parameters. **The directory map is the one terminal result**: it is a summary bounded by the tree's directory count,
+so it is never paged and an `offset` into it is ignored rather than answered with one directory per call. The one
+exception is `show`, whose offset is a **source line** (the note ends
+`· source line, resumable with read`) so it can be passed straight to `read offset=550`; its blocks carry a
+`sourceStart`/`prelude` map to translate, and a result spanning two files **or requesting symbols out of source order**
+falls back to a rendered line — a source cursor there can step backwards, and a reader following `# next` assumes it
+advances. Two failure modes to keep out: the inverse (`sourceLineToBodyOffset`) must find the block whose range
+*contains* the requested line rather than walking from the first block (that replayed a page forever when the budget
+fitted only a declaration header), and a reprint heading must yield to content when it would crowd out the only line
+that fits. A page
+never starts on the blank line between two blocks. There is no block allocator: the character `limit` is the page
+size and lines are the unit, so a page may start inside a declaration. A line longer than the limit cannot be
+split, and that page reports the limit needed.

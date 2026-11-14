@@ -206,7 +206,7 @@ export async function runShow(
             offset,
             fileOf,
         );
-        const next = nextOffsetNote(ambiguous.fitted, { unit: "match-list line" });
+        const next = nextOffsetNote(ambiguous.fitted, params);
 
         return {
             text: bodyThenFooter([ambiguous.fitted.text], [ambiguous.note, next, filter]),
@@ -223,16 +223,21 @@ export async function runShow(
     const starts = blockLineStarts(texts);
     const firstFile = blocks.find((block) => block.file !== undefined)?.file;
     // A single number can address a file, not several: with blocks from two files (a declaration and its
-    // definition) the offset stays a body line. One file is the common case and the one `read` can resume.
+    // definition) the offset stays a rendered line. It also needs the blocks to sit in source order: requesting
+    // `late, early` renders the later declaration first, and a source-line cursor would then step backwards when
+    // the next block began — a reader following `# next` assumes it advances.
     const blockFiles = new Set(
         blocks.map((block) => block.file?.path).filter((file) => file !== undefined),
     );
-    const sourceLines = blockFiles.size <= 1;
+    const ascending = blocks.every(
+        (block, index) => index === 0 || (blocks[index - 1]?.sourceStart ?? 0) <= block.sourceStart,
+    );
+    const sourceLines = blockFiles.size <= 1 && ascending;
     // `offset` is a source line so a paged body resumes where `read` would: the page names the line and the file.
     const bodyOffset = sourceLines
         ? sourceLineToBodyOffset(blocks, starts, offset, firstFile)
         : offset;
-    const fitted = renderWithinBudget(header, texts, limit, bodyOffset);
+    const fitted = renderWithinBudget(header, texts, limit, bodyOffset, { headings: true });
     const note = matchNote(groups, selectors);
     const partial = partialHintNote(selectors, groups);
     const elsewhere = await elsewhereNote(source, root, missing, signal, timing);
@@ -241,8 +246,8 @@ export async function runShow(
     const absent =
         missing.length === 0 ? undefined : `# not found: ${missing.join(", ")} in ${scope}`;
     const next = sourceLines
-        ? showNextNote(source, fitted, blocks, starts, firstFile)
-        : nextOffsetNote(fitted);
+        ? showNextNote(source, fitted, blocks, starts, firstFile, params)
+        : nextOffsetNote(fitted, params);
     const text = bodyThenFooter(
         [fitted.text],
         [note, partial, ...hintNotes, absent, ...elsewhere, next, filter],
@@ -260,7 +265,7 @@ export async function runShow(
 /**
  * One line per resolved symbol, printed before any body.
  *
- * A body that fills the character budget leaves `# next: offset=N` and nothing else, so without this index the
+ * A body that fills the character budget leaves a `# next:` line and nothing else, so without this index the
  * second symbol of a two-symbol request is invisible: the caller cannot tell "not found" from "not reached". One
  * line per symbol is cheap enough to pay on every multi-symbol call, and it is where the span for a `read` comes
  * from.
@@ -661,9 +666,11 @@ function renderLeaf(
 /**
  * Turn a requested source line into the body-line offset `renderWithinBudget` pages by.
  *
- * The first block's file is the reference: `show` names one symbol, and a declaration and its definition in two files
- * are rare enough that a page starting in the second one is better than a page starting nowhere. A line before the
- * first block starts at the top; a line past the last block asks for the end, which the renderer reports.
+ * The block whose source range contains the line is the one to resume in. Scanning for that block rather than walking
+ * from the first one matters because blocks keep the caller's request order: `show query="late, early"` renders the
+ * later declaration first, and an ordered walk treated the earlier one as "before the first block" and replayed the
+ * page instead of reaching it. A line above every block starts at the earliest one's heading; a line past them asks
+ * for the end, which the renderer reports.
  */
 function sourceLineToBodyOffset(
     blocks: readonly ShowBlock[],
@@ -671,31 +678,52 @@ function sourceLineToBodyOffset(
     requested: number,
     firstFile: ParsedFile | undefined,
 ): number {
-    const first = blocks.findIndex((block) => block.file?.path === firstFile?.path);
+    const file = firstFile?.path;
 
-    if (requested <= 0 || first === -1) {
+    if (requested <= 0 || file === undefined) {
         return Math.max(0, requested);
     }
 
-    const firstBlock = blocks[first];
+    let earliest: number | undefined;
+    let earliestLine = Number.POSITIVE_INFINITY;
+    let containing: number | undefined;
 
-    if (firstBlock === undefined || requested <= firstBlock.sourceStart) {
-        return starts[first] ?? 0;
-    }
-
-    for (let index = first; index < blocks.length; index += 1) {
+    for (let index = 0; index < blocks.length; index += 1) {
         const block = blocks[index];
 
-        if (block === undefined || block.file?.path !== firstFile?.path) {
+        if (block === undefined || block.file?.path !== file) {
             continue;
         }
 
-        if (requested <= block.sourceStart + Math.max(0, blockSourceLines(block) - 1)) {
-            return (starts[index] ?? 0) + block.prelude + (requested - block.sourceStart);
+        if (block.sourceStart < earliestLine) {
+            earliestLine = block.sourceStart;
+            earliest = index;
+        }
+
+        const end = block.sourceStart + Math.max(0, blockSourceLines(block) - 1);
+
+        if (requested >= block.sourceStart && requested <= end) {
+            containing ??= index;
         }
     }
 
-    return bodyLineTotal(blocks, starts);
+    if (earliest === undefined) {
+        return Math.max(0, requested);
+    }
+
+    const target = containing ?? (requested < earliestLine ? earliest : undefined);
+
+    if (target === undefined) {
+        return bodyLineTotal(blocks, starts);
+    }
+
+    const block = blocks[target];
+
+    if (block === undefined) {
+        return bodyLineTotal(blocks, starts);
+    }
+
+    return (starts[target] ?? 0) + block.prelude + Math.max(0, requested - block.sourceStart);
 }
 
 /** The next page's first source line, or a body-line note when no block owns the offset. */
@@ -705,6 +733,7 @@ function showNextNote(
     blocks: readonly ShowBlock[],
     starts: readonly number[],
     firstFile: ParsedFile | undefined,
+    params: CodeToolParams,
 ): string | undefined {
     if (fitted.nextOffset === undefined) {
         return undefined;
@@ -715,7 +744,7 @@ function showNextNote(
     const start = starts[index] ?? 0;
 
     if (block === undefined) {
-        return nextOffsetNote(fitted);
+        return nextOffsetNote(fitted, params);
     }
 
     const line = block.sourceStart + Math.max(0, fitted.nextOffset - start - block.prelude);
@@ -724,7 +753,7 @@ function showNextNote(
             ? undefined
             : source.displayPath(block.file.path);
 
-    return nextOffsetNote(fitted, { offset: line, where, sourceLine: true });
+    return nextOffsetNote(fitted, params, { offset: line, where, sourceLine: true });
 }
 
 /** The block a body-line lands in, including the blank line between two blocks. */
