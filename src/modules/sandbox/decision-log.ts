@@ -55,6 +55,14 @@ export interface BashDecisionRecord {
     };
     /** set by the read-only child gate, whose allow/block never came from the resolver */
     readOnlyGate?: true;
+    /**
+     * Present on a read-only-gate row that was refused without a request: the deterministic reasons the
+     * gate stopped at. A consulted row carries `classifier` instead, so a reader can separate "the model
+     * was never asked" from "the model was asked and refused".
+     */
+    reasons?: UnsafeReason[];
+    /** Where the read-only gate stopped before any request. Present only with {@link reasons}. */
+    readOnlyGateStage?: ReadOnlyGateStage;
     /** present only when a human was asked */
     prompt?: {
         outcome: PromptOutcome;
@@ -75,6 +83,9 @@ export interface BashDecisionRecord {
     /** note the user attached while approving or denying */
     note?: string;
 }
+
+/** Where the read-only child gate stopped a command before asking the model. */
+export type ReadOnlyGateStage = "not-consultable" | "surface-disabled" | "relaxed-unsafe";
 
 /**
  * How the interactive prompt ended. `"dismissed"` is an Esc/abort, which the
@@ -178,6 +189,10 @@ export interface BashDecisionInput {
     details?: ResolvePermissionDetails;
     /** Marks a record the read-only child gate wrote; the resolver's `details` are then absent. */
     readOnlyGate?: boolean;
+    /** Deterministic refusal reasons; set only on a read-only-gate row that never reached the model. */
+    reasons?: readonly UnsafeReason[];
+    /** Where that refusal happened. */
+    readOnlyGateStage?: ReadOnlyGateStage;
     prompt?: {
         outcome: PromptOutcome;
         suggestion?: string;
@@ -385,6 +400,10 @@ export function logBashDecision(input: BashDecisionInput): void {
                   },
               }),
         ...(input.readOnlyGate === true ? { readOnlyGate: true } : {}),
+        ...(input.reasons === undefined ? {} : { reasons: [...input.reasons] }),
+        ...(input.readOnlyGateStage === undefined
+            ? {}
+            : { readOnlyGateStage: input.readOnlyGateStage }),
         ...(input.prompt === undefined
             ? {}
             : {

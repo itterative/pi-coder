@@ -338,6 +338,8 @@ function newGroup() {
         count: 0,
         examples: [],
         notes: [],
+        reasons: new Set(),
+        stages: new Set(),
         suggestions: new Map(),
         rules: new Map(),
         agents: new Set(),
@@ -358,6 +360,12 @@ function addRecord(group, record) {
     group.surfaces.add(record.surface);
     if (record.note !== undefined && !group.notes.includes(record.note)) {
         group.notes.push(record.note);
+    }
+    for (const reason of record.reasons ?? []) {
+        group.reasons.add(reason);
+    }
+    if (record.readOnlyGateStage !== undefined) {
+        group.stages.add(record.readOnlyGateStage);
     }
     if (record.prompt?.suggestion !== undefined) {
         group.suggestions.set(
@@ -459,6 +467,12 @@ function renderGroupSection(title, blurb, map, options) {
 
     for (const [key, group] of rows) {
         lines.push(`  ${String(group.count).padStart(4)}x  ${key}`);
+        if (group.reasons.size > 0) {
+            lines.push(`          refused:         ${[...group.reasons].join(", ")}`);
+        }
+        if (group.stages.size > 0) {
+            lines.push(`          gate stage:      ${[...group.stages].join(", ")}`);
+        }
         for (const example of group.examples) {
             lines.push(`          e.g. ${singleLine(example)}`);
         }
@@ -538,7 +552,7 @@ function renderReport(records, stats, options) {
     out.push(
         renderGroupSection(
             "READ-ONLY CHILD GATE",
-            "  safe-bash calls sent to the decision model — allowed, denied, or a dry-run verdict",
+            "  safe-bash calls the read-only gate resolved — consulted, or refused before a request",
             stats.analysis.readOnlyGate,
             options,
         ),
@@ -619,6 +633,8 @@ function main() {
                         count: group.count,
                         examples: group.examples,
                         notes: group.notes,
+                        reasons: [...group.reasons],
+                        stages: [...group.stages],
                         rules: Object.fromEntries(group.rules),
                         suggestions: Object.fromEntries(group.suggestions),
                         agents: [...group.agents],

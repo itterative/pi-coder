@@ -71,25 +71,41 @@ export interface SafeBashGuardOptions extends SafeBashOptions {
 }
 
 /**
- * The reasons the decision model may be asked about.
+ * The reasons a model verdict must not override.
  *
- * Only the curated-allowlist axis: a command the heuristic does not know is judged elsewhere, while a
- * confinement failure (outside cwd, sensitive path, symlink escape, dynamic path, dangerous environment,
- * parse failure) is the deterministic layer's own decision and a classifier cannot overwrite it. Known-command
- * flag and mode failures stay deterministic too: the safe-bash guard is stronger than a model opinion for the
- * write shapes (`sed -i`, redirections) it was built to block.
+ * This is deliberately a denylist rather than an allowlist. The relaxed assessment below already re-checks
+ * every literal path with the unknown executables admitted, so it is the real gate for "can this be judged":
+ * a malformed or uncurated command shape (`EMPTY_INPUT`, `UNKNOWN_COMMAND`, an unmodeled subcommand) may be
+ * sent to the model, while a confinement failure or a modeled write shape may not. Keying the boundary on the
+ * strict reasons alone left one hole: an assessment with no reasons at all was never consultable even when
+ * the relaxed view called the command safe, so the two checks disagreed about the same line.
+ *
+ * A write classification is excluded separately by requiring `UNSAFE`: the read-only gate only relaxes reads.
  */
-const MODEL_CONSULTABLE_REASONS: ReadonlySet<UnsafeReason> = new Set([
-    UnsafeReason.UNKNOWN_COMMAND,
-    UnsafeReason.COMMAND_NOT_ALLOWED,
+const NON_CONSULTABLE_REASONS: ReadonlySet<UnsafeReason> = new Set([
+    UnsafeReason.OUTSIDE_CWD,
+    UnsafeReason.NOT_IN_WRITABLE_ROOT,
+    UnsafeReason.SENSITIVE_PATH,
+    UnsafeReason.SYMLINK_ESCAPE,
+    UnsafeReason.DYNAMIC_CWD,
+    UnsafeReason.PARSE_ERROR,
+    UnsafeReason.DANGEROUS_ENVIRONMENT,
+    UnsafeReason.COMMAND_PATH,
+    UnsafeReason.UNSAFE_FLAG,
+    UnsafeReason.UNSAFE_MODE,
+    UnsafeReason.HEURISTIC_DISABLED,
 ]);
 
-/** Whether every reason for an unsafe assessment belongs to the allowlist axis. */
+/**
+ * Whether an unsafe assessment may reach the relaxed-confinement check at all.
+ *
+ * True does not mean "consult": the caller still requires the relaxed view to pass, because that view is
+ * what re-checks the command's paths with its executables admitted as generics.
+ */
 export function isModelConsultableAssessment(assessment: HeuristicAssessment): boolean {
     return (
-        assessment.classification !== Heuristic.SAFE_READONLY &&
-        assessment.reasons.length > 0 &&
-        assessment.reasons.every((reason) => MODEL_CONSULTABLE_REASONS.has(reason))
+        assessment.classification === Heuristic.UNSAFE &&
+        assessment.reasons.every((reason) => !NON_CONSULTABLE_REASONS.has(reason))
     );
 }
 
@@ -99,7 +115,7 @@ export type RelaxedConfinement = "safe" | "readable" | "unsafe";
 /**
  * Classify what the relaxed (generic-spec) confinement view says about a command.
  *
- * The strict pass has already reduced the failure to the curated-allowlist axis; this pass admits every bare
+ * The strict pass has already excluded confinement and modeled-write failures; this pass admits every bare
  * executable as a generic path-checked command, so literal paths are still checked against the child's roots.
  * `safe` means that view passed outright. `readable` means it failed only on dynamic paths while the
  * command's one code subject was still read from disk and every unmodeled word is data — the shape

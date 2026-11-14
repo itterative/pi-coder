@@ -35,15 +35,36 @@ function makeWorkspace(): string {
 }
 
 describe("safe-bash decision consult boundary", () => {
-    it("consults only on the allowlist axis", () => {
+    it("lets the relaxed verdict decide, except for confinement and write reasons", () => {
+        // Uncurated or unmodeled shapes: the relaxed view is what decides whether to ask.
         expect(isModelConsultableAssessment(unsafe(UnsafeReason.UNKNOWN_COMMAND))).toBe(true);
         expect(isModelConsultableAssessment(unsafe(UnsafeReason.COMMAND_NOT_ALLOWED))).toBe(true);
+        expect(isModelConsultableAssessment(unsafe(UnsafeReason.UNSAFE_COMMAND))).toBe(true);
+        expect(isModelConsultableAssessment(unsafe(UnsafeReason.UNSAFE_SUBCOMMAND))).toBe(true);
+        expect(isModelConsultableAssessment(unsafe(UnsafeReason.EMPTY_INPUT))).toBe(true);
 
+        // An assessment the strict pass could not explain still reaches the relaxed check; before, the
+        // empty reason list made it silently unconsultable even when the relaxed view called it safe.
+        expect(isModelConsultableAssessment(unsafe())).toBe(true);
+
+        // Confinement and modeled-flag failures are the deterministic layer's own decision.
         expect(isModelConsultableAssessment(unsafe(UnsafeReason.OUTSIDE_CWD))).toBe(false);
+        expect(isModelConsultableAssessment(unsafe(UnsafeReason.SENSITIVE_PATH))).toBe(false);
+        expect(isModelConsultableAssessment(unsafe(UnsafeReason.DYNAMIC_CWD))).toBe(false);
+        expect(isModelConsultableAssessment(unsafe(UnsafeReason.UNSAFE_MODE))).toBe(false);
         expect(
             isModelConsultableAssessment(
                 unsafe(UnsafeReason.UNKNOWN_COMMAND, UnsafeReason.UNSAFE_FLAG),
             ),
+        ).toBe(false);
+
+        // The read-only gate only relaxes reads, so a write classification never reaches the model.
+        expect(
+            isModelConsultableAssessment({
+                classification: Heuristic.SAFE_EDIT,
+                reasons: [],
+                tags: [],
+            }),
         ).toBe(false);
         expect(
             isModelConsultableAssessment({

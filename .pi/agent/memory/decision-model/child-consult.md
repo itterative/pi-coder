@@ -15,9 +15,19 @@ are documented in `sandbox/probe.md` (index: `sandbox.md`).
 
 A child below the `command` rung has no prompt to fall back on, so `safe-bash` was the whole policy. When
 `surfaces` includes `child`, an allowlist failure now gets a model second opinion under three deterministic
-conditions: the assessment's reasons are only `UNKNOWN_COMMAND`/`COMMAND_NOT_ALLOWED` (a confinement failure is
-not consultable), `classifyRelaxedConfinement` returns `safe` or `readable`, and the config enables the
-surface. `safe` is the relaxed assessment — each bare executable admitted as a generic, path-checked command —
+conditions:
+
+1. the assessment is `UNSAFE` and carries no confinement or authority reason (outside cwd, not in a writable
+   root, sensitive path, symlink escape, dynamic cwd, parse failure, dangerous environment, command path,
+   unsafe flag, unsafe mode, heuristic disabled). This is a denylist, not an allowlist: `UNKNOWN_COMMAND`,
+   `COMMAND_NOT_ALLOWED`, `EMPTY_INPUT`, `UNSAFE_COMMAND`, `UNSAFE_SUBCOMMAND`, and `DYNAMIC_PATH` may reach the
+   relaxed check, while a `SAFE_EDIT` write classification never does. The relaxed check is the real gate, so
+   an assessment the strict pass could not explain (no reasons) is still consultable; before, it was silently
+   refused even when the relaxed view called the command safe;
+2. `classifyRelaxedConfinement` returns `safe` or `readable` — a known command's unmodeled subcommand still
+   fails here, because the relaxed pass re-derives the same curated spec, which is why the git forensic verbs
+   were curated rather than routed to the model;
+3. the child surface is enabled in the decision config, and `apply` is what lets a verdict act. `safe` is the relaxed assessment — each bare executable admitted as a generic, path-checked command —
 passing with literal paths confined. `readable` is a single code subject read from disk (`resolveScriptRun`
 artifacts, each artifact path confined) whose only remaining failures are dynamic paths: the code/file operand
 and every flag/env word are literal, and the unmodeled words are data positionals — file subjects may take
@@ -31,4 +41,6 @@ was never judged (a `binary` run, a dynamically assembled inline operand) is hel
 must not gain authority through the invocation answer. The consult passes the child's declared `authority`, so
 a custom read-only definition is scope-checked at `inspect` rather than the `agent` name's command baseline.
 The record carries `readOnlyGate: true` and no `resolution`; `npm run permission-report` lists those rows in a
-READ-ONLY CHILD GATE section.
+READ-ONLY CHILD GATE section. A refusal that happens before any request now writes the same record shape with
+`reasons` and `readOnlyGateStage` (`not-consultable`, `surface-disabled`, or `relaxed-unsafe`) and no
+`classifier`, so an allowlist gap is visible in the report instead of only in a child transcript.

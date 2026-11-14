@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import sandboxConfig from "../../src/common/config";
 import { PI_CODER_EXTENSION_DIR } from "../../src/common/constants";
 import { logBashDecision, type BashDecisionInput } from "../../src/modules/sandbox/decision-log";
+import { UnsafeReason } from "../../src/modules/sandbox/heuristics";
 import {
     resolvePermissionDetails,
     unresolvedPermissionDetails,
@@ -30,7 +31,10 @@ interface ReportJson {
     promptedDenied: Record<string, { count: number; notes: string[] }>;
     heuristicGrants: Record<string, { count: number }>;
     unasked: Record<string, { count: number; agents: string[] }>;
-    readOnlyGate: Record<string, { count: number; agents: string[] }>;
+    readOnlyGate: Record<
+        string,
+        { count: number; agents: string[]; reasons: string[]; stages: string[] }
+    >;
     ruleHits: Record<string, number>;
 }
 
@@ -158,13 +162,15 @@ describe("permission-report script", () => {
         expect(report.unasked["terraform plan"].agents).toEqual(["scout"]);
     });
 
-    it("lists read-only-gate rows that never ran the resolver", () => {
+    it("lists read-only-gate rows that never ran the resolver, including deterministic refusals", () => {
         logBashDecision({
             surface: "child",
             agentName: "scout",
             cwd: workspace,
-            command: "python3 -c 'print(1)'",
+            command: "git fsck --lost-found",
             readOnlyGate: true,
+            reasons: [UnsafeReason.OUTSIDE_CWD],
+            readOnlyGateStage: "not-consultable",
             decision: "deny",
             sandboxed: false,
             blocked: true,
@@ -174,7 +180,12 @@ describe("permission-report script", () => {
         expect(report.total).toBe(1);
         expect(report.blocked).toBe(1);
         expect(Object.values(report.readOnlyGate)).toEqual([
-            expect.objectContaining({ count: 1, agents: ["scout"] }),
+            expect.objectContaining({
+                count: 1,
+                agents: ["scout"],
+                reasons: [UnsafeReason.OUTSIDE_CWD],
+                stages: ["not-consultable"],
+            }),
         ]);
         expect(report.unasked).toEqual({});
     });

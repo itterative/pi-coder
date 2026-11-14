@@ -15,6 +15,7 @@ import { SCRIPT_QUESTION, SUGGESTION_QUESTION_ID, VETO_QUESTION } from "../../sr
 import { resetDecisionEvaluator } from "../../src/modules/decision/gate";
 import { DECISION_PROVIDER_ID } from "../../src/modules/decision/provider";
 import type { BashDecisionRecord } from "../../src/modules/sandbox/decision-log";
+import { UnsafeReason } from "../../src/modules/sandbox/heuristics";
 import type { ChildAgentFactoryContext } from "../../src/tools/agent/contracts/runs";
 import type { AgentDefinition } from "../../src/tools/agent/definitions/types";
 import { getPermissionState } from "../../src/modules/sandbox/permission-state";
@@ -663,7 +664,16 @@ describe("read-only child decision consult", () => {
 
         expect(run.result).toMatchObject({ block: true });
         expect(run.classify).not.toHaveBeenCalled();
-        expect(run.records).toHaveLength(0);
+
+        const [record] = run.records;
+        expect(record).toMatchObject({
+            readOnlyGate: true,
+            decision: "deny",
+            blocked: true,
+            readOnlyGateStage: "relaxed-unsafe",
+            reasons: [UnsafeReason.UNKNOWN_COMMAND],
+        });
+        expect(record?.classifier).toBeUndefined();
     });
 
     it("records a dry-run verdict and still blocks when apply is off", async () => {
@@ -685,7 +695,32 @@ describe("read-only child decision consult", () => {
 
         expect(run.result).toMatchObject({ block: true });
         expect(run.classify).not.toHaveBeenCalled();
-        expect(run.records).toHaveLength(0);
+
+        const [record] = run.records;
+        expect(record).toMatchObject({
+            readOnlyGate: true,
+            decision: "deny",
+            blocked: true,
+            readOnlyGateStage: "relaxed-unsafe",
+            reasons: [UnsafeReason.UNKNOWN_COMMAND],
+        });
+    });
+
+    it("records the configured surface as the reason a consult never happened", async () => {
+        const run = await runReadOnlyDecision({
+            command: "python3 -c 'print(1)'",
+            surfaces: [],
+        });
+
+        expect(run.result).toMatchObject({ block: true });
+        expect(run.classify).not.toHaveBeenCalled();
+
+        const [record] = run.records;
+        expect(record).toMatchObject({
+            readOnlyGate: true,
+            blocked: true,
+            readOnlyGateStage: "surface-disabled",
+        });
     });
 
     it("consults an allowlist miss on a path this runtime's own view allows", async () => {
@@ -705,7 +740,10 @@ describe("read-only child decision consult", () => {
         const confined = await runReadOnlyDecision({ command, containerBash: false });
         expect(confined.result).toMatchObject({ block: true });
         expect(confined.classify).not.toHaveBeenCalled();
-        expect(confined.records).toHaveLength(0);
+        expect(confined.records[0]).toMatchObject({
+            readOnlyGateStage: "relaxed-unsafe",
+            reasons: [UnsafeReason.UNKNOWN_COMMAND],
+        });
     });
 
     it("runs a curated command on the fast path, without a consult", async () => {

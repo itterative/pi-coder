@@ -1,4 +1,4 @@
-import { CommandTag, UNSAFE, VALUE, type CommandSpec } from "./spec";
+import { CommandTag, PATH_VALUE, UNSAFE, VALUE, type CommandSpec } from "./spec";
 
 // shared by log and whatchanged (an alias of log)
 const LOG_SPEC: CommandSpec = {
@@ -47,6 +47,14 @@ const BRANCH_SPEC: CommandSpec = {
         "--edit-description": UNSAFE,
         "--track": UNSAFE,
         "--no-track": UNSAFE,
+        // Read-only selectors: each consumes its revision so `positionals: "none"` still holds.
+        "--contains": VALUE,
+        "--no-contains": VALUE,
+        "--merged": VALUE,
+        "--no-merged": VALUE,
+        "--points-at": VALUE,
+        "--sort": VALUE,
+        "--format": VALUE,
     },
 };
 
@@ -120,6 +128,163 @@ const DIFF_SPEC: CommandSpec = {
 const SHOW_SPEC: CommandSpec = {
     flags: { "--output": UNSAFE },
     validate: (args) => !args.some((arg) => arg === "--output" || arg.startsWith("--output=")),
+};
+
+/**
+ * Read-only history and object inspection that answers "what does git still hold".
+ *
+ * These verbs are the forensic half of git: they read the object database, refs, and reflogs, and
+ * write nothing. They are curated as a family because a delegated search for lost commits needs
+ * several of them in one pass; each miss used to be an unconsultable `UNSAFE_SUBCOMMAND` (see
+ * `sandbox/commands.md`). Only flags that write or consume unmodeled stdin are marked, because every
+ * remaining argument is data for these verbs rather than a filesystem path.
+ *
+ * Deliberately absent: `gc`/`prune` (maintenance, not inspection), `config` (can expose unrelated
+ * configuration), `ls-remote` (network), and `verify-pack` (takes a `.git` path, which the sensitive
+ * path rule refuses; `count-objects` and `fsck` answer the same question).
+ */
+const HISTORY_SPEC: CommandSpec = {
+    positionals: "ignore",
+};
+
+const REV_LIST_SPEC: CommandSpec = {
+    positionals: "ignore",
+    flags: {
+        "-n": VALUE,
+        "--max-count": VALUE,
+        "--skip": VALUE,
+        "--since": VALUE,
+        "--until": VALUE,
+        "--after": VALUE,
+        "--before": VALUE,
+        "--author": VALUE,
+        "--committer": VALUE,
+        "--grep": VALUE,
+        "--format": VALUE,
+        "--pretty": VALUE,
+        "--date": VALUE,
+        "--encoding": VALUE,
+        "--min-parents": VALUE,
+        "--max-parents": VALUE,
+        "--exclude": VALUE,
+        "--glob": VALUE,
+        "--filter": VALUE,
+        "--missing": VALUE,
+        // Reads a revision list from stdin, which the AST does not model.
+        "--stdin": UNSAFE,
+    },
+};
+
+/** `cat-file` reads objects; `--filters`/`--textconv` run configured helpers and batch modes read stdin. */
+const CAT_FILE_SPEC: CommandSpec = {
+    positionals: "ignore",
+    flags: {
+        "--filters": UNSAFE,
+        "--textconv": UNSAFE,
+        "--batch": UNSAFE,
+        "--batch-check": UNSAFE,
+        "--batch-command": UNSAFE,
+        "--follow-symlinks": UNSAFE,
+        "--path": PATH_VALUE,
+    },
+};
+
+/** `reflog` dispatches again on its verb: `show`/`exists` read, `expire`/`delete`/`drop` move refs. */
+const REFLOG_SPEC: CommandSpec = {
+    positionals: "ignore",
+    flags: {
+        "-n": VALUE,
+        "--max-count": VALUE,
+        "--format": VALUE,
+        "--pretty": VALUE,
+        "--date": VALUE,
+        "--decorate": VALUE,
+        "--output": UNSAFE,
+    },
+    validate: (args) => {
+        const verb = args[1];
+        // No verb (bare `git reflog`) is `show`; a leading option is a show option.
+        return verb === undefined || verb.startsWith("-") || verb === "show" || verb === "exists";
+    },
+};
+
+const STASH_SPEC: CommandSpec = {
+    positionals: "ignore",
+    flags: {
+        "-p": {},
+        "--patch": {},
+        "--stat": {},
+        "--no-stat": {},
+        "--numstat": {},
+        "--shortstat": {},
+        "--name-only": {},
+        "--name-status": {},
+        "--include-untracked": {},
+        "--only-untracked": {},
+        "--binary": {},
+        "-n": VALUE,
+        "--max-count": VALUE,
+        "--format": VALUE,
+        "--pretty": VALUE,
+        "--date": VALUE,
+        "--since": VALUE,
+        "--until": VALUE,
+        "--author": VALUE,
+        "--grep": VALUE,
+        "--output": UNSAFE,
+    },
+    // Both readers take the log-option surface; every mutating verb stays refused. `--output` is the
+    // one log option that writes, so the validate check backs up the flag's own UNSAFE marking.
+    validate: (args) =>
+        (args[1] === "list" || args[1] === "show") &&
+        !args.some((arg) => arg === "--output" || arg.startsWith("--output=")),
+};
+
+/**
+ * `git format-patch` exports a mailbox. Without `--stdout` it writes `.patch` files into the cwd or an
+ * `-o` directory, so only the stdout mode is read-only; the output-directory flags stay unsafe.
+ */
+const FORMAT_PATCH_SPEC: CommandSpec = {
+    positionals: "ignore",
+    safeModeFlags: ["--stdout"],
+    flags: {
+        "-o": UNSAFE,
+        "--output-directory": UNSAFE,
+        "--stdout": {},
+    },
+};
+
+const FSCK_SPEC: CommandSpec = {
+    positionals: "ignore",
+    flags: {
+        // Writes `.git/lost-found`; plain fsck only reports.
+        "--lost-found": UNSAFE,
+    },
+};
+
+const FOR_EACH_REF_SPEC: CommandSpec = {
+    positionals: "ignore",
+    flags: {
+        "--format": VALUE,
+        "--sort": VALUE,
+        "--count": VALUE,
+        "--points-at": VALUE,
+        "--merged": VALUE,
+        "--no-merged": VALUE,
+        "--contains": VALUE,
+        "--no-contains": VALUE,
+        "--stdin": UNSAFE,
+    },
+};
+
+const NAME_REV_SPEC: CommandSpec = {
+    positionals: "ignore",
+    flags: {
+        "--refs": VALUE,
+        "--exclude": VALUE,
+        "--stdin": UNSAFE,
+        "--annotate-stdin": UNSAFE,
+    },
 };
 
 /**
@@ -201,13 +366,26 @@ export const VCS_COMMANDS: Record<string, CommandSpec> = {
             whatchanged: LOG_SPEC,
             branch: BRANCH_SPEC,
             tag: TAG_SPEC,
-            // `stash` dispatches again on its own verb, and only `list` reads: pop/drop/clear/push all
-            // move refs or the worktree, and bare `git stash` is a push. The subcommand validate hook is
-            // what keeps the single-level dispatch from granting the mutators with the reader.
-            stash: {
-                positionals: "ignore",
-                validate: (args) => args.length === 2 && args[1] === "list",
+            // `stash` dispatches again on its own verb, and only `list`/`show` read: pop/drop/clear/push
+            // all move refs or the worktree, and bare `git stash` is a push. The subcommand validate hook
+            // is what keeps the single-level dispatch from granting the mutators with the readers.
+            stash: STASH_SPEC,
+            // The forensic verbs. `reflog` and `stash` dispatch again on their own verb; the rest take
+            // data positionals (revisions, refs, object names), not filesystem paths.
+            "rev-list": REV_LIST_SPEC,
+            "cat-file": CAT_FILE_SPEC,
+            "format-patch": FORMAT_PATCH_SPEC,
+            reflog: REFLOG_SPEC,
+            fsck: FSCK_SPEC,
+            "count-objects": { positionals: "none" },
+            "for-each-ref": FOR_EACH_REF_SPEC,
+            "show-ref": HISTORY_SPEC,
+            "ls-tree": {
+                ...HISTORY_SPEC,
+                flags: { "--format": VALUE, "--abbrev": VALUE },
             },
+            "name-rev": NAME_REV_SPEC,
+            "merge-base": HISTORY_SPEC,
         },
     },
 };

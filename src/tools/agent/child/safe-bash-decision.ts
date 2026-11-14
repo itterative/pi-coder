@@ -5,7 +5,10 @@ import { decisionEnabled } from "../../../modules/decision/gate";
 import { decisionRunnerForAgent } from "../../../modules/decision/runner-rules";
 import type { DecisionAuthority } from "../../../modules/decision";
 import { logBashDecision } from "../../../modules/sandbox/decision-log";
-import type { BashClassifierRecord } from "../../../modules/sandbox/decision-log";
+import type {
+    BashClassifierRecord,
+    ReadOnlyGateStage,
+} from "../../../modules/sandbox/decision-log";
 import type { HeuristicAssessment } from "../../../modules/sandbox/heuristics";
 import { consultForGate, readOnlyGateSentence } from "../../decision-model";
 import type { AgentAuthority } from "../definitions/types";
@@ -60,17 +63,35 @@ export function createSafeBashConsult(
 
     return async (assessment: HeuristicAssessment): Promise<SafeBashConsultResult> => {
         if (!isModelConsultableAssessment(assessment)) {
+            recordDeterministicRefusal({
+                runtime,
+                command,
+                assessment,
+                stage: "not-consultable",
+            });
             return { allowed: false };
         }
 
         const config = decisionConfig.load(ctx.cwd ?? runtime.cwd);
         if (!decisionEnabled(config, "child")) {
+            recordDeterministicRefusal({
+                runtime,
+                command,
+                assessment,
+                stage: "surface-disabled",
+            });
             return { allowed: false };
         }
 
         const confinement = classifyRelaxedConfinement(command, ctx.cwd ?? runtime.cwd, roots);
         if (confinement === "unsafe") {
             onTrace?.("safe_bash.model_skipped", { reason: "confinement" });
+            recordDeterministicRefusal({
+                runtime,
+                command,
+                assessment,
+                stage: "relaxed-unsafe",
+            });
             return { allowed: false };
         }
 
@@ -169,7 +190,29 @@ function capabilityCoversReadOnlyCommand(record: BashClassifierRecord): boolean 
     return true;
 }
 
-/** Record what the read-only gate decided, since its blocks never pass through the resolver's writer. */
+/** Record a gate refusal that happened before any request, so the gap is minable without a transcript. */
+function recordDeterministicRefusal(input: {
+    runtime: ChildGateRuntime;
+    command: string;
+    assessment: HeuristicAssessment;
+    stage: ReadOnlyGateStage;
+}): void {
+    const { runtime, command, assessment, stage } = input;
+    logBashDecision({
+        surface: "child",
+        agentName: runtime.options.agentName,
+        cwd: runtime.cwd,
+        command,
+        readOnlyGate: true,
+        reasons: assessment.reasons,
+        readOnlyGateStage: stage,
+        decision: "deny",
+        sandboxed: false,
+        blocked: true,
+    });
+}
+
+/** Record a consulted verdict, whose allow/block never passes through the resolver's writer either. */
 function recordConsult(input: {
     runtime: ChildGateRuntime;
     command: string;

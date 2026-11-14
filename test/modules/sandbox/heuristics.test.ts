@@ -2146,9 +2146,124 @@ describe("getCwdConfinementPermission", () => {
                 expected: Heuristic.UNSAFE,
             },
             {
-                desc: "git stash list with a flag: falls back",
-                command: "git stash list --format=%s",
+                desc: "git stash list takes the log-option surface",
+                command: "git stash list --format='%gd %H %ci %s'",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "git stash list still refuses an output file",
+                command: "git stash list --output=out.txt",
                 expected: Heuristic.UNSAFE,
+            },
+            {
+                desc: "git stash show is the read-only patch/stat form",
+                command: "git stash show --stat HEAD",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "git stash show still refuses an output file",
+                command: "git stash show --output=out.patch HEAD",
+                expected: Heuristic.UNSAFE,
+            },
+            {
+                desc: "git format-patch --stdout exports without writing",
+                command: "git format-patch --stdout HEAD~1..HEAD",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "git format-patch without --stdout writes files: falls back",
+                command: "git format-patch HEAD~1..HEAD",
+                expected: Heuristic.UNSAFE,
+            },
+            {
+                desc: "git format-patch refuses an output directory even with --stdout",
+                command: "git format-patch --stdout -o out HEAD~1..HEAD",
+                expected: Heuristic.UNSAFE,
+            },
+            {
+                desc: "git rev-list reads history",
+                command: "git rev-list --all --count",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "git rev-list refuses unmodeled stdin",
+                command: "git rev-list --stdin",
+                expected: Heuristic.UNSAFE,
+            },
+            {
+                desc: "git reflog show reads the reflog",
+                command: "git reflog show stash",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "bare git reflog is show",
+                command: "git reflog -n 5",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "git reflog expire moves refs: falls back",
+                command: "git reflog expire --expire=now --all",
+                expected: Heuristic.UNSAFE,
+            },
+            {
+                desc: "git fsck reports without writing",
+                command: "git fsck --dangling --no-reflogs",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "git fsck --lost-found writes .git/lost-found: falls back",
+                command: "git fsck --lost-found",
+                expected: Heuristic.UNSAFE,
+            },
+            {
+                desc: "git cat-file -t reads an object",
+                command: "git cat-file -t HEAD",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "git cat-file --filters runs configured helpers: falls back",
+                command: "git cat-file --filters HEAD:file.txt",
+                expected: Heuristic.UNSAFE,
+            },
+            {
+                desc: "git cat-file --batch reads unmodeled stdin: falls back",
+                command: "git cat-file --batch",
+                expected: Heuristic.UNSAFE,
+            },
+            {
+                desc: "git count-objects reads the object store",
+                command: "git count-objects -v --count-packs",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "git for-each-ref reads refs",
+                command: "git for-each-ref --format=%(refname) --sort=refname",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "git show-ref reads refs",
+                command: "git show-ref --heads",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "git ls-tree reads a tree",
+                command: "git ls-tree -r --name-only HEAD",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "git name-rev reads commits",
+                command: "git name-rev --all --name-only --tags",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "git merge-base compares commits",
+                command: "git merge-base --is-ancestor HEAD main",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "git branch --contains consumes its revision",
+                command: "git branch -a --contains HEAD",
+                expected: Heuristic.SAFE_READONLY,
             },
             {
                 desc: "git worktree add: falls back",
