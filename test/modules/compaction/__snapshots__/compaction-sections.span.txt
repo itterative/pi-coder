@@ -2,11 +2,6 @@
 - "first request"
 - "second request with a very long tail second request with a very long tail second request with a very long tail second request with a very long tail second request with a very long tail second request with a very long tail second request with a very long tail second request with a very long tail second request with a very long tail second request with a very long tail second request with a very lon [... 1079 more characters truncated]"
 
-## Tool Ledger
-- agent x2
-- read x2, 1 failed
-- total 4 tool calls, 1 failed
-
 ## Delegated Runs
 - start scout Map the compaction path
 - collect [01abc]

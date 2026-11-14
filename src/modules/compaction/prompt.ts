@@ -40,7 +40,7 @@ const PI_SECTIONS = `## Goal
 /** The sections this module fills in deterministically, so the model must not guess at them. */
 const OWNERSHIP = [
     "Write only the sections above. The harness appends these itself, so leave them out:",
-    "- Verbatim Recent Requests, Tool Ledger, Delegated Runs, Context Fold",
+    "- Verbatim Recent Requests, Delegated Runs, Context Fold",
     "- <read-files> and <modified-files> blocks",
     "",
     "Keep each section concise. Preserve exact file paths, function names, symbols, commands, error",

@@ -4,20 +4,15 @@ import type { ContextMessage } from "./types";
 /**
  * Deterministic parts of the summary, computed from the transcript rather than recalled by the model.
  *
- * Everything here is mechanically knowable from the span pi is about to discard: which tools ran and how
- * often, which calls failed, what the user literally asked for, which delegated run ids appeared. Asking a
- * model to reproduce those from memory is how compaction drifts, and a wrong count is worse than no count,
- * because it reads as authority. The model is only asked for the judgement-bearing sections.
+ * Everything here is mechanically knowable from the span pi is about to discard: what the user literally asked
+ * for and which delegated run ids appeared. Asking a model to reproduce those from memory is how compaction
+ * drifts, and a wrong identifier is worse than no identifier, because it reads as authority. The model is only
+ * asked for the judgement-bearing sections.
  */
 
 const RECENT_REQUEST_COUNT = 3;
 const RECENT_REQUEST_CHARS = 400;
-const LEDGER_TITLE_CHARS = 80;
-
-export interface ToolTally {
-    calls: number;
-    failed: number;
-}
+const RUN_TITLE_CHARS = 80;
 
 export interface DelegatedRunCall {
     action?: string;
@@ -29,12 +24,9 @@ export interface DelegatedRunCall {
 export interface SpanAnalysis {
     /** User requests in chronological order, whitespace-collapsed. */
     userRequests: string[];
-    tools: Map<string, ToolTally>;
     agentCalls: DelegatedRunCall[];
     agentRunIds: Set<string>;
     messageCount: number;
-    toolCallCount: number;
-    failedToolCallCount: number;
 }
 
 function stringField(args: Record<string, unknown>, key: string): string | undefined {
@@ -42,20 +34,10 @@ function stringField(args: Record<string, unknown>, key: string): string | undef
     return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function tally(tools: Map<string, ToolTally>, name: string, field: "calls" | "failed"): void {
-    const entry = tools.get(name) ?? { calls: 0, failed: 0 };
-    entry[field] += 1;
-    tools.set(name, entry);
-}
-
 export function analyzeSpan(messages: ContextMessage[]): SpanAnalysis {
-    const tools = new Map<string, ToolTally>();
     const agentCalls: DelegatedRunCall[] = [];
     const agentRunIds = new Set<string>();
     const userRequests: string[] = [];
-    const failedCallIds = new Set<string>();
-    const namesByCallId = new Map<string, string>();
-    let toolCallCount = 0;
 
     for (const message of messages) {
         if (message.role === "user") {
@@ -70,37 +52,20 @@ export function analyzeSpan(messages: ContextMessage[]): SpanAnalysis {
                 if (block.type !== "toolCall") {
                     continue;
                 }
-                toolCallCount += 1;
-                namesByCallId.set(block.id, block.name);
-                tally(tools, block.name, "calls");
                 const args: Record<string, unknown> = block.arguments ?? {};
                 if (block.name !== "agent") {
                     continue;
                 }
                 recordAgentCall(args, agentCalls, agentRunIds);
             }
-            continue;
-        }
-        if (message.role === "toolResult" && message.isError) {
-            failedCallIds.add(message.toolCallId);
-        }
-    }
-
-    for (const callId of failedCallIds) {
-        const name = namesByCallId.get(callId);
-        if (name) {
-            tally(tools, name, "failed");
         }
     }
 
     return {
         userRequests,
-        tools,
         agentCalls,
         agentRunIds,
         messageCount: messages.length,
-        toolCallCount,
-        failedToolCallCount: failedCallIds.size,
     };
 }
 
@@ -152,21 +117,6 @@ function verbatimRequests(analysis: SpanAnalysis): string {
     return ["## Verbatim Recent Requests", ...lines].join("\n");
 }
 
-function ledgerLines(analysis: SpanAnalysis): string {
-    if (analysis.tools.size === 0) {
-        return "";
-    }
-    const entries = [...analysis.tools.entries()].sort((a, b) => b[1].calls - a[1].calls);
-    const parts = entries.map(([name, tallyEntry]) => {
-        const failed = tallyEntry.failed > 0 ? `, ${String(tallyEntry.failed)} failed` : "";
-        return `${name} x${String(tallyEntry.calls)}${failed}`;
-    });
-    const totals =
-        `total ${String(analysis.toolCallCount)} tool calls, ` +
-        `${String(analysis.failedToolCallCount)} failed`;
-    return ["## Tool Ledger", ...parts.map((part) => `- ${part}`), `- ${totals}`].join("\n");
-}
-
 function delegatedRuns(analysis: SpanAnalysis): string {
     if (analysis.agentCalls.length === 0) {
         return "";
@@ -176,7 +126,7 @@ function delegatedRuns(analysis: SpanAnalysis): string {
         const details = [
             call.action,
             call.agent,
-            call.title && truncateHead(call.title, LEDGER_TITLE_CHARS),
+            call.title && truncateHead(call.title, RUN_TITLE_CHARS),
         ]
             .filter((part): part is string => Boolean(part))
             .join(" ");
@@ -208,7 +158,6 @@ export function buildSupplementarySections(input: SupplementarySectionInput): st
             : "";
     const sections = [
         verbatimRequests(input.analysis),
-        ledgerLines(input.analysis),
         delegatedRuns(input.analysis),
         `${folded}${omitted}`,
     ];

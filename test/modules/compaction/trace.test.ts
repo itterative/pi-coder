@@ -172,7 +172,7 @@ describe("compaction trace", () => {
         ]);
         // (b) what actually goes into the CompactionEntry.
         expect(byStage.get("final_summary")?.text).toBe(payload?.summary);
-        expect(byStage.get("final_summary")?.text).toContain("## Tool Ledger");
+        expect(byStage.get("final_summary")?.text).toContain("## Verbatim Recent Requests");
         expect(byStage.get("final_summary")?.text).toContain("<read-files>");
         expect(byStage.get("final_summary")?.final).toMatchObject({
             firstKeptEntryId: "kept-1",

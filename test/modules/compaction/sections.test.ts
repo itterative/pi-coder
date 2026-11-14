@@ -33,18 +33,10 @@ describe("deterministic summary sections", () => {
         userMessage("second request with a very long tail ".repeat(40)),
     ];
 
-    it("counts calls and failures per tool", () => {
-        const analysis = analyzeSpan(messages);
-        expect(analysis.tools.get("agent")).toEqual({ calls: 2, failed: 0 });
-        expect(analysis.tools.get("read")).toEqual({ calls: 2, failed: 1 });
-        expect(analysis.toolCallCount).toBe(4);
-        expect(analysis.failedToolCallCount).toBe(1);
-        expect(analysis.messageCount).toBe(messages.length);
-    });
-
     it("collects delegated run ids from the calls that named them", () => {
         const analysis = analyzeSpan(messages);
         expect([...analysis.agentRunIds]).toEqual(["01abc"]);
+        expect(analysis.messageCount).toBe(messages.length);
         expect(analysis.agentCalls[0]).toEqual({
             action: "start",
             agent: "scout",

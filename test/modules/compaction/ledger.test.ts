@@ -990,10 +990,12 @@ describe("the capture that fired the tier live", () => {
         expect(recorded?.rowsEstimated).toBe(2_967);
         expect(body?.rows.estimated).toBe(984);
         expect(body?.rows.counted).toBe((recorded?.rowsCounted ?? 0) + 1_770);
-        // The over-read was the entire skew: +1.31% recorded, +0.005% now, against the same provider count.
+        // The over-read was the entire skew: +1.31% recorded, +0.016% now, against the same provider count. The
+        // remainder is not measurement: the capture's stage-1 instruction predates the Tool Ledger's removal, so
+        // the instruction rebuilt here is three tokens shorter than the one the provider counted.
         expect(Math.abs((recorded?.tokens ?? 0) - provider) / provider).toBeGreaterThan(0.013);
         expect(Math.abs((recorded?.tokens ?? 0) - provider) / provider).toBeLessThan(0.014);
-        expect(Math.abs((body?.tokens ?? 0) - provider) / provider).toBeLessThan(0.0001);
+        expect(provider - (body?.tokens ?? 0)).toBe(3);
         // And the share of the number that is chars/4 fell with it, which is what the refusal threshold reads.
         expect((recorded?.estimatedTokens ?? 0) / (recorded?.tokens ?? 1)).toBeGreaterThan(0.24);
         expect((body?.estimatedTokens ?? 0) / (body?.tokens ?? 1)).toBeLessThan(0.15);
