@@ -325,8 +325,9 @@ wants, and the footer says so. A kind filter suppresses them, because a comment 
 
 The channel is literal *and* semantic: each block also gets a vector keyed by its text (`commentEntriesOf` in
 `semantic/index.ts`), so a paraphrase lands on a file whose own header answers it. A block reached only by
-similarity is tagged `[related 73%]` — a guess, never counted as a match, with its confidence as an integer
-percentage: the cosine for an embedding row, a share of the best guess for a BM25 or fused row. Doc comments are not
+similarity is tagged `[related 73%]` — a guess, never counted as a match, and the percentage is embedding similarity
+(a cosine); a block found by the lexical ranker instead prints a bare `[related]`, because BM25 and fused ranks are
+relative to the result and have no absolute score to show. Doc comments are not
 duplicated this way: they
 are already embedded in the head vector of the declaration that owns them, and counted as `[doc]` rows.
 
@@ -573,11 +574,14 @@ identifier typo match (the corrected name is the answer) and a one-character que
 embedding costs under 100 ms, so there is no longer a cost reason to gate the channel on how little the literal pass
 found.
 
-Every related row prints its confidence as an integer percentage: `[related 73%]`. `ScoredDeclaration` carries the
-`scale` beside the score, because the conversion differs. A cosine is already 0-1, so its percentage is the score
-itself (0.71 → `71%`). BM25 is unbounded and a fused RRF sum sits near 0.02, so those two are divided by the best row
-in the same result — 100% means "best guess here", not "likely to be right" (`confidencePercent` in `search.ts`). An
-exact channel (`[doc]`, `[body]`, a name match) has no percentage, because it either matched or did not.
+A related row prints its confidence as an integer percentage **only when the score is a cosine**: `[related 73%]`.
+`ScoredDeclaration` carries the `scale` beside the score, and `confidencePercent` (`search.ts`) converts by it. A
+cosine is already 0-1, so its percentage is the score itself (0.71 → `71%`) and means 0.71 of similarity. BM25 is
+unbounded and moves with the corpus and the query, and a fused RRF sum sits near 0.02 — a rank position. Dividing
+either by the best row makes the top row `100%` by construction, which is the one number a reader cannot use, so those
+rows print a bare `[related]` and the `# related:` footer names the scale. One scale per page is the rule: the tail is
+dense-only (cosine), lexical-only (BM25), or fused (RRF), never a mix. An exact channel (`[doc]`, `[body]`, a name
+match) has no percentage either, because it either matched or did not.
 
 Measured on an 8-declaration fixture with the real artifacts: the dense channel changed no *rank* that BM25 had not
 already got right (a tail needs only partial term overlap), and its visible effect was filling the tail to

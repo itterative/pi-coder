@@ -337,23 +337,23 @@ export async function runSearch(
     // what it failed to find. A name or body hit still leads (`leads`), so the tail only ever decorates an answer that
     // already had evidence.
     const wantsRelated = wantsRelatedChannel(query, fuzzyHits.length);
-    const related = wantsRelated
-        ? (
-              await timing.measure("tail", () =>
-                  collectRelated(
-                      semantic,
-                      leads,
-                      parsed,
-                      source,
-                      root,
-                      query,
-                      discovery.truncated,
-                      [...literalRows, ...standaloneBody, ...commentRows, ...fuzzyHits],
-                      signal,
-                  ),
-              )
-          ).filter(ownsKind)
-        : [];
+    const tail = wantsRelated
+        ? await timing.measure("tail", () =>
+              collectRelated(
+                  semantic,
+                  leads,
+                  parsed,
+                  source,
+                  root,
+                  query,
+                  discovery.truncated,
+                  [...literalRows, ...standaloneBody, ...commentRows, ...fuzzyHits],
+                  signal,
+              ),
+          )
+        : undefined;
+    const related = (tail?.hits ?? []).filter(ownsKind);
+    const relatedScale = tail?.scale;
     const relatedKeys = new Set(related.map((hit) => hitKey(hit)));
     const lexicalRest = [...literalRows, ...standaloneBody, ...commentRows, ...fuzzyHits].filter(
         (hit) => !relatedKeys.has(hitKey(hit)),
@@ -443,6 +443,7 @@ export async function runSearch(
         shown: total,
         approximateTotal: fuzzy?.total ?? 0,
         relatedMatches: related.length,
+        relatedCosine: relatedScale === "cosine",
         relatedVisible: visible.relatedVisible,
         bodyMatches: bodyOnPage,
         bodyWithheld,
@@ -718,6 +719,17 @@ function relatedLedPage(
     return [...related.slice(0, TAIL_ROWS - 1), ...lexicalRest, ...related.slice(TAIL_ROWS - 1)];
 }
 
+/**
+ * The ranked tail: its rows, and the scale that ranked them.
+ *
+ * The scale travels with the rows because the legend and the confidence label both depend on it: a cosine is an
+ * absolute similarity, while BM25 and a fused RRF sum only order the rows of this one result.
+ */
+interface RelatedTail {
+    hits: SearchHit[];
+    scale: RankScale | undefined;
+}
+
 async function collectRelated(
     semantic: SemanticSearch | undefined,
     leads: boolean,
@@ -728,9 +740,9 @@ async function collectRelated(
     truncated: boolean,
     shown: readonly SearchHit[],
     signal?: AbortSignal,
-): Promise<SearchHit[]> {
+): Promise<RelatedTail> {
     if (semantic === undefined) {
-        return [];
+        return { hits: [], scale: undefined };
     }
 
     // A related-first page skips nothing: its own rows come first, and the lexical ones are filtered after it.
@@ -747,7 +759,6 @@ async function collectRelated(
         signal,
     );
     const tail: SearchHit[] = [];
-    const best = ranked[0]?.score ?? 0;
 
     for (const entry of ranked) {
         const key = rankKeyOf(entry);
@@ -763,7 +774,7 @@ async function collectRelated(
             comment: entry.comment,
             tier: TIER_RELATED,
             chunk: entry.chunk,
-            confidence: confidencePercent(entry.score, best, entry.scale),
+            confidence: confidencePercent(entry.score, entry.scale),
         });
 
         if (tail.length >= TAIL_ROWS) {
@@ -771,7 +782,7 @@ async function collectRelated(
         }
     }
 
-    return tail;
+    return { hits: tail, scale: ranked[0]?.scale };
 }
 
 async function collectFuzzy(
@@ -1249,22 +1260,19 @@ function channelTag(hit: SearchHit): string {
 }
 
 /**
- * The ranked channel's score, on the tag of the row it placed.
+ * A ranker score as an integer percentage on the row, when the score is a similarity.
  *
- * A bare `[related]` says the row is a guess but not whether it is the best guess or the last one over the floor.
- * Three significant digits keep a fused RRF sum (`0.0167`) and a BM25 score (`12.4`) both readable.
+ * A cosine is absolute: 0.71 is 0.71 whatever else the result contains, so its percentage is the score itself. BM25
+ * is unbounded and moves with the corpus and the query, and a fused RRF sum (~0.02) is a rank position; dividing
+ * either by the best row makes the top row `100%` by construction, which is the one number a reader cannot use. Those
+ * rows print a bare `[related]` and the footer names the scale.
  */
-/**
- * A ranker score as an integer percentage on the row.
- *
- * The embedding channel's cosine is already 0-1, so its percentage is the score itself and 71% means 0.71 of
- * similarity. BM25 is unbounded and a fused RRF sum sits near 0.02, so those two are divided by the best row in the
- * same result: 100% means "best guess here", not "certain".
- */
-function confidencePercent(score: number, best: number, scale: RankScale): number {
-    const value = scale === "cosine" ? score * 100 : best > 0 ? (score / best) * 100 : 0;
+function confidencePercent(score: number, scale: RankScale): number | undefined {
+    if (scale !== "cosine") {
+        return undefined;
+    }
 
-    return Math.max(0, Math.min(100, Math.round(value)));
+    return Math.round(Math.max(0, Math.min(1, score)) * 100);
 }
 
 function scoreLabel(hit: SearchHit): string {
@@ -1402,6 +1410,8 @@ function footerFor(options: {
     shown: number;
     approximateTotal: number;
     relatedMatches: number;
+    /** Whether the tail was ranked by cosine, the only scale whose score is an absolute similarity. */
+    relatedCosine: boolean;
     /** Whether a related row is on this page: a legend for rows the page does not show is noise. */
     relatedVisible: boolean;
     bodyMatches: number;
@@ -1418,7 +1428,9 @@ function footerFor(options: {
 
     if (options.relatedMatches > 0 && options.relatedVisible) {
         footer.push(
-            "# related: guesses, not matches · % = similarity (embedding) or share of the best guess (BM25/fused) · §i/n :start-end = matched chunk",
+            options.relatedCosine
+                ? "# related: guesses, not matches · % = embedding similarity (cosine) · §i/n :start-end = matched chunk"
+                : "# related: guesses, not matches · ranked by BM25/fusion, which orders this result and is not a similarity · §i/n :start-end = matched chunk",
         );
     }
 

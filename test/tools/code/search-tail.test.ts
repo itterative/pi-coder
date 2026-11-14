@@ -106,7 +106,9 @@ describe("outline search relevance tail", () => {
         expect(result.text).toContain("no literal matches");
         expect(result.text).toMatch(/\[related \d+%\]/u);
         expect(result.text).toContain("1 related guess");
-        expect(result.text).toContain("# related: guesses, not matches · % = similarity");
+        expect(result.text).toContain(
+            "# related: guesses, not matches · % = embedding similarity (cosine)",
+        );
         expect(result.text).toContain("# semantic: enable semantic search");
     });
 
@@ -134,6 +136,35 @@ describe("outline search relevance tail", () => {
         // A cosine is already 0-1, so a relative share would inflate 0.55 into 77%.
         expect(result.text).toContain("[related 71%]");
         expect(result.text).toContain("[related 55%]");
+        expect(result.text).toContain("% = embedding similarity (cosine)");
+    });
+
+    it("prints no percentage when the tail was ranked lexically", async () => {
+        const semantic: SemanticSearch = {
+            hint: undefined,
+            dispose: () => undefined,
+            async rank(request) {
+                const file = request.files[0]!;
+                const [first, second] = file.all;
+
+                return [
+                    { file, declaration: first!, score: 5.2, scale: "bm25" },
+                    { file, declaration: second!, score: 3.5, scale: "bm25" },
+                ];
+            },
+        };
+        const result = await runSearch(
+            source(),
+            { action: "search", path: "src", query: "lifetime policy" },
+            undefined,
+            semantic,
+        );
+
+        // 5.2 and 3.5 are corpus-relative magnitudes: as a share of the best they would read `100%` and `67%`, which
+        // says the top row is certain when it is only the top row.
+        expect(result.text).toMatch(/\[related\]/u);
+        expect(result.text).not.toMatch(/\[related \d/u);
+        expect(result.text).toContain("ranked by BM25/fusion");
     });
 
     it("says the default scan skipped ignored paths when only guesses came back", async () => {
@@ -359,10 +390,10 @@ describe("outline search related-led page", () => {
 
         // The order is a measured decision, but the row that is evidence stays on the page the caller reads.
         expect(literal).toBeGreaterThanOrEqual(0);
-        expect(result.text).toMatch(/\[related \d+%\]/u);
-        // The percentage is of the best guess in this result: the top-ranked row is 100%, the eighth is not.
-        expect(result.text).toContain("[related 100%]");
-        expect(result.text).toMatch(/\[related (?:[1-9]|[1-9]\d)%\]/u);
+        // A fused tail has no absolute score, so the rows carry the tag alone and the footer names the scale.
+        expect(result.text).toMatch(/\[related\]/u);
+        expect(result.text).not.toMatch(/\[related \d/u);
+        expect(result.text).toContain("ranked by BM25/fusion");
         // A row the page shows needs no second mention in the footer.
         expect(result.text).not.toContain("# also:");
     });

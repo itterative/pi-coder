@@ -66,13 +66,19 @@ queries whose answer is absent top out at 0.420–0.540, six whose answer is pre
 gap; the old ORT-era gemma table (0.680 for an absent answer) is *not* evidence about the shipped GGUF and is why the
 value is not inherited per runtime. Rows either floor removes are not counted or labelled.
 
-**The score survives to the row, as an integer percentage.** `fuseRankings` used to drop the score, so a reader could
-not tell the best guess from the last one over the floor. `ScoredDeclaration` carries `score` **and `scale`**
-(`bm25` | `cosine` | `rrf`), and `runSearch` converts by scale: a cosine is already 0-1 so its percentage is the score
-itself (0.71 → `71%`), while BM25 (unbounded) and fused RRF (~0.02) are divided by the best row in the same result
-(100% = best guess here, not certainty). Guessing the unit from the number would inflate a weak cosine. An exact
-channel (`[doc]`, `[body]`, a name match) carries no percentage. Any change to the ranker's return type must keep
-both fields attached, and test doubles must supply them.
+**The score survives to the row, as an integer percentage — but only when it is a similarity.** `ScoredDeclaration`
+carries `score` **and `scale`** (`bm25` | `cosine` | `rrf`), and `confidencePercent` (`search.ts`) prints a number for
+`cosine` only: 0.71 is 0.71 of similarity whatever else the result contains (0.71 → `71%`). BM25 is unbounded and
+moves with the corpus and the query, and a fused RRF sum (~0.02) is a rank position; dividing either by the best row
+in the same result makes the top row `100%` by construction — the exact tautology `[related 100%]` showed on `docs`,
+where the tree had no dense vectors and the tail fell back to BM25. Those rows print a bare `[related]`, and the
+`# related:` footer says whether the ranking was cosine or BM25/fusion. One scale per page is the invariant: the tail
+is dense-only, lexical-only, or fused, never a mix. Rows are grouped by file, so a page descends *inside* each block
+and its blocks are ordered by their best row: a later block can start above the previous block's last percentage, and
+that is the grouping rule, not an anomaly in the scores. Attaching a cosine to a fused row was rejected for that
+reason (RRF can rank a lower-cosine row above a higher one). An exact channel (`[doc]`, `[body]`, a name match)
+carries no percentage either. Any change to the ranker's return type must keep both fields attached, and test doubles
+must supply them.
 
 ## Literal body text
 

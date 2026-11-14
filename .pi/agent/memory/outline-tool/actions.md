@@ -115,8 +115,9 @@ file. Grouping by first appearance keeps the ranked order of files and keeps the
 pager. A heading row prints its literal text only (`heading  ## Install`):
 `Parent::Parent::Child` repeated the chain a digest map already shows by indentation, and the signature column said
 the title again. `show` still matches the chain, so the row stays addressable. A related row's score rides on
-the tag (`[related 73%]`: a cosine prints as itself, since it is already 0-1, while BM25 and fused RRF print as a
-share of the best guess in that result). `moreNote` names the file a cut page hid and carries **no count** — `# next:`
+the tag (`[related 73%]`: a cosine prints as itself, since it is already 0-1; BM25 and fused RRF print a bare
+`[related]`, because a share of the best guess is a ranking, not a similarity). `moreNote` names the file a cut page
+hid and carries **no count** — `# next:`
 already has the line count, and two counters a line apart read as two different remaining amounts. Its row starts are
 exact line indices from `groupBlocks`, not a text match against the page. The `# related:` legend is suppressed when no
 related row is on the page (a beyond-end offset), so it never explains rows the page does not show; the header count
