@@ -12,6 +12,7 @@ import { discoverFiles, filterPathTarget, parsePathTarget, patternWithinTarget }
 import {
     bodyThenFooter,
     declarationKindCounts,
+    defaultScopeNote,
     discoveryCapNote,
     filterNote,
     isContainer,
@@ -379,7 +380,7 @@ export async function runSearch(
                 [
                     `# ${reason} ${quotedForMessage(query)} in ${scope} · ${fileCount(parsed.length)} · ${languages}`,
                 ],
-                [filter, within],
+                [defaultScopeNote(params.path), filter, within],
             ),
             files: parsed.length,
             parseErrors,
@@ -422,7 +423,10 @@ export async function runSearch(
     });
     const hint = related.length > 0 && semantic?.hint !== undefined ? [semantic.hint] : [];
     const next = nextOffsetNote(fitted);
-    const text = bodyThenFooter([fitted.text], [next, ...footer, ...hint]);
+    // Related rows are guesses, not matches: a search with no literal row still needs to say that the default scan
+    // skipped ignored paths, or the guesses read as the whole answer.
+    const scopeNote = scopeNoteFor(params, literalTotal);
+    const text = bodyThenFooter([fitted.text], [next, scopeNote, ...footer, ...hint]);
 
     return {
         text,
@@ -1109,6 +1113,10 @@ function declarationTag(declaration: Declaration): string {
  * shapes are not questions and skip it — a typo of an identifier (the corrected name is the answer, and precise
  * evidence outranks a similarity guess) and a one-character query (a substring request, not a topic).
  */
+function scopeNoteFor(params: CodeToolParams, literalTotal: number): string | undefined {
+    return literalTotal === 0 ? defaultScopeNote(params.path) : undefined;
+}
+
 function wantsRelatedChannel(query: ParsedQuery, fuzzyCount: number): boolean {
     return fuzzyCount === 0 && query.raw.replace(/"/g, "").length > 1;
 }

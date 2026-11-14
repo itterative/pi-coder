@@ -143,7 +143,7 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
             offset: Type.Optional(
                 Type.Number({
                     description:
-                        "Body-line offset for continuing a result cut by the limit (default 0); the previous page names it in # next",
+                        "Offset for continuing a result cut by the limit (default 0); the previous page names it in # next. A body-line offset for digest, search, usages, flow, and deps; a source line for show, so the note can be passed to read as-is.",
                     minimum: 0,
                     maximum: 1_000_000,
                 }),

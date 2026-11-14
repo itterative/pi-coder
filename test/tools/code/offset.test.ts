@@ -167,6 +167,98 @@ describe("outline output offsets", () => {
         expect(text).toContain("last_function");
     });
 
+    it("reports a show continuation as a source line read can resume from", async () => {
+        const first = await runShow(source(), {
+            action: "show",
+            path: "big.cpp",
+            query: "big_function",
+            limit: 300,
+        });
+        const offset = nextOffset(first.text);
+
+        expect(first.text).toContain("(source line)");
+        expect(offset).toBeGreaterThan(1);
+        // `void big_function() {` is line 1, so `int value_N` is source line N + 2.
+        expect(offset).toBeLessThanOrEqual(122);
+
+        const resumed = await runShow(source(), {
+            action: "show",
+            path: "big.cpp",
+            query: "big_function",
+            limit: 300,
+            offset: offset ?? 0,
+        });
+
+        // The page starts at the line the note named, exactly as `read offset=<line>` would.
+        expect(resumed.text).toContain(`int value_${(offset ?? 0) - 2} = `);
+    });
+
+    it("keeps body-line offsets when a show result spans two files", async () => {
+        const twoFiles = new MemoryCodeSource("/project", {
+            "a.hpp": "void connect(int port);\n",
+            "b.cpp": [
+                "void connect(int port) {",
+                ...Array.from({ length: 120 }, (_, index) => `    int value_${index} = ${index};`),
+                "}",
+                "",
+            ].join("\n"),
+        });
+        const result = await runShow(twoFiles, {
+            action: "show",
+            path: ".",
+            query: "connect",
+            detail: "full",
+            limit: 400,
+        });
+
+        // A source line cannot say which of the two files it is in, so the older body-line contract stands.
+        expect(result.text).toMatch(/# next: offset=\d+/);
+        expect(result.text).not.toContain("(source line)");
+
+        const resumed = await runShow(twoFiles, {
+            action: "show",
+            path: ".",
+            query: "connect",
+            detail: "full",
+            limit: 400,
+            offset: nextOffset(result.text) ?? 0,
+        });
+
+        expect(resumed.text).toContain("int value_0 = 0;");
+    });
+
+    it("keeps blank lines so a source-line offset maps one-to-one", async () => {
+        const lines = ["void spaced() {"];
+
+        for (let index = 0; index < 40; index += 1) {
+            lines.push(`    int value_${index} = ${index};`, "");
+        }
+
+        lines.push("}", "");
+        const spaced = new MemoryCodeSource("/project", { "spaced.cpp": lines.join("\n") });
+        const first = await runShow(spaced, {
+            action: "show",
+            path: "spaced.cpp",
+            query: "spaced",
+            limit: 300,
+        });
+        const offset = nextOffset(first.text) ?? 0;
+
+        // A dropped blank line would shift every later line against the file.
+        expect(first.text).toContain("int value_0 = 0;\n\n    int value_1 = 1;");
+        expect(offset).toBeGreaterThan(1);
+
+        const resumed = await runShow(spaced, {
+            action: "show",
+            path: "spaced.cpp",
+            query: "spaced",
+            limit: 300,
+            offset,
+        });
+
+        expect(resumed.text).toContain(lines.slice(offset - 1, offset + 2).join("\n"));
+    });
+
     it("pages a show body to the end", async () => {
         const text = await collectPages(async (offset) => {
             const result = await runShow(source(), {

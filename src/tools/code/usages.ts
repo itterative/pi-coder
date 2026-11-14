@@ -10,6 +10,7 @@ import {
 } from "./discovery";
 import {
     bodyThenFooter,
+    defaultScopeNote,
     discoveryCapNote,
     filterNote,
     nextOffsetNote,
@@ -152,6 +153,7 @@ export async function runUsages(
                     `# no usages found for ${requested.join(", ")} in ${scopeLabel(scope)} · ${target.pattern === undefined ? "no supported files" : "no files match"}`,
                 ],
                 [
+                    defaultScopeNote(params.path),
                     widenNote(scope, requested.join(", ")),
                     filter,
                     discovery.truncated ? discoveryCapNote() : "",
@@ -217,7 +219,17 @@ export async function runUsages(
 
         totalMatches += collected.total;
 
-        sections.push(renderSection(source, raw, collected, languages, parseErrors, scope));
+        sections.push(
+            renderSection(
+                source,
+                raw,
+                collected,
+                languages,
+                parseErrors,
+                scope,
+                defaultScopeNote(params.path),
+            ),
+        );
     }
 
     if (sections.length === 1) {
@@ -636,6 +648,7 @@ function renderSection(
     languages: string,
     parseErrors: number,
     rootDisplay: string,
+    scopeNote?: string,
 ): string {
     const headerNotes = [
         `# usages ${raw} · ${collected.total} matches${lineNote(collected)} · ${languages} · syntactic (name-based)`,
@@ -647,6 +660,10 @@ function renderSection(
 
     if (collected.files.length === 0) {
         headerNotes.push(`# no usages found in ${scopeLabel(rootDisplay)}`);
+
+        if (scopeNote !== undefined) {
+            headerNotes.push(scopeNote);
+        }
 
         const widen = widenNote(rootDisplay, raw);
 

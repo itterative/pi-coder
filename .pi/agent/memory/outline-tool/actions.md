@@ -48,7 +48,9 @@ honest boundary is "no identifier or doc comment spells it out", not "no such co
   remains, replaces `# no declarations` with that explanation. A directory digest omits the kind line because it
   would repeat per file. The directory map, which shows no members, carries no note.
 - **Narrowing is a parameter.** A `path` pattern and `kind` narrow the discovered set (`deps` takes a literal file);
-  `# filter:` names them and any hidden count (`outline-tool/search.md`).
+  `# filter:` names them and any hidden count (`outline-tool/search.md`). A zero-hit under the default scope adds
+  `# note: the default scan skips ignored paths (…); pass path= to search one`, because a named path is scanned
+  literally while the cwd scan honors ignore files.
 
 ## `digest`
 
@@ -99,6 +101,8 @@ whose split parts all miss but whose text names a heading is used whole (announc
 
 ## Cuts
 
-Cuts are resumable: every action takes `offset` in rendered body lines and a cut ends `# next: offset=N`. Pages
-prefer block boundaries but can resume inside an oversized block; a line longer than the limit cannot be split,
-and the page reports the limit needed.
+Cuts are resumable: every action takes `offset` in rendered body lines and a cut ends `# next: offset=N`. The one
+exception is `show`, whose offset is a **source line** so `# next: offset=550 of src/x.cpp (source line)` can be
+passed straight to `read path=src/x.cpp offset=550`; its blocks carry a `sourceStart`/`prelude` map to translate.
+Pages prefer block boundaries but can resume inside an oversized block; a line longer than the limit cannot be
+split, and the page reports the limit needed.

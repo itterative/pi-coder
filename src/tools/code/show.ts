@@ -7,6 +7,8 @@ import {
     patternWithinTarget,
 } from "./discovery";
 import {
+    blockLineStarts,
+    defaultScopeNote,
     declarationHeading,
     declarationLine,
     filterNote,
@@ -46,6 +48,17 @@ export interface ShowResult {
 interface MatchGroup {
     key: string;
     declarations: Declaration[];
+}
+
+/** One rendered section, with what a source line needs to map onto its lines. */
+interface ShowBlock {
+    text: string;
+    /** The file its source lines come from; absent for a block that is only an index line. */
+    file?: ParsedFile;
+    /** Source line of the first line after the prelude. */
+    sourceStart: number;
+    /** Rendered lines before the source begins: the header, and a dedent note when there is one. */
+    prelude: number;
 }
 
 const AMBIGUITY_LIMIT = 5;
@@ -92,6 +105,8 @@ export async function runShow(
                           scope,
                           requested,
                           await elsewhereNote(source, root, requested, signal, timing),
+                          [],
+                          defaultScopeNote(params.path),
                       )
                     : bodyThenFooter(
                           [`# not found: ${requested.join(", ")} in ${scope} · no files match`],
@@ -151,7 +166,7 @@ export async function runShow(
         const elsewhere = await elsewhereNote(source, root, missing, signal, timing);
 
         return {
-            text: notFound(scope, requested, elsewhere, hintNotes),
+            text: notFound(scope, requested, elsewhere, hintNotes, defaultScopeNote(params.path)),
             files: files.length,
             parseErrors: sumParseErrors(files),
             truncated: discovery.truncated,
@@ -191,7 +206,7 @@ export async function runShow(
             offset,
             fileOf,
         );
-        const next = nextOffsetNote(ambiguous.fitted);
+        const next = nextOffsetNote(ambiguous.fitted, { unit: "match-list line" });
 
         return {
             text: bodyThenFooter([ambiguous.fitted.text], [ambiguous.note, next, filter]),
@@ -203,10 +218,21 @@ export async function runShow(
     }
 
     const detail = params.detail;
-    const blocks = groups
-        .map((group) => renderGroup(source, group, fileOf, detail))
-        .filter((block): block is string => block !== undefined);
-    const fitted = renderWithinBudget(header, blocks, limit, offset);
+    const blocks = groups.flatMap((group) => renderGroup(source, group, fileOf, detail));
+    const texts = blocks.map((block) => block.text);
+    const starts = blockLineStarts(texts);
+    const firstFile = blocks.find((block) => block.file !== undefined)?.file;
+    // A single number can address a file, not several: with blocks from two files (a declaration and its
+    // definition) the offset stays a body line. One file is the common case and the one `read` can resume.
+    const blockFiles = new Set(
+        blocks.map((block) => block.file?.path).filter((file) => file !== undefined),
+    );
+    const sourceLines = blockFiles.size <= 1;
+    // `offset` is a source line so a paged body resumes where `read` would: the page names the line and the file.
+    const bodyOffset = sourceLines
+        ? sourceLineToBodyOffset(blocks, starts, offset, firstFile)
+        : offset;
+    const fitted = renderWithinBudget(header, texts, limit, bodyOffset);
     const note = matchNote(groups, selectors);
     const partial = partialHintNote(selectors, groups);
     const elsewhere = await elsewhereNote(source, root, missing, signal, timing);
@@ -214,7 +240,9 @@ export async function runShow(
     // resolved, and the caller cannot tell that from "not reached".
     const absent =
         missing.length === 0 ? undefined : `# not found: ${missing.join(", ")} in ${scope}`;
-    const next = nextOffsetNote(fitted);
+    const next = sourceLines
+        ? showNextNote(source, fitted, blocks, starts, firstFile)
+        : nextOffsetNote(fitted);
     const text = bodyThenFooter(
         [fitted.text],
         [note, partial, ...hintNotes, absent, ...elsewhere, next, filter],
@@ -471,7 +499,7 @@ function renderGroup(
     group: MatchGroup,
     fileOf: ReadonlyMap<Declaration, ParsedFile>,
     detail: CodeDetail | undefined,
-): string | undefined {
+): ShowBlock[] {
     const declarations = group.declarations.toSorted(compareDeclarations);
     const container =
         declarations.find((declaration) => isSection(declaration) && declaration.isDefinition) ??
@@ -481,10 +509,10 @@ function renderGroup(
         const file = fileOf.get(container);
 
         if (file === undefined) {
-            return undefined;
+            return [];
         }
 
-        return renderContainer(source, container, file, detail ?? "signatures");
+        return [renderContainer(source, container, file, detail ?? "signatures")];
     }
 
     return renderLeafGroup(source, declarations, fileOf, detail ?? "full");
@@ -495,14 +523,23 @@ function renderContainer(
     container: Declaration,
     file: ParsedFile,
     detail: CodeDetail,
-): string {
+): ShowBlock {
     const header = `# ${pathRange(source.displayPath(file.path), container.range)} · ${declarationHeading(container)}`;
 
     if (detail === "full") {
         const body = sourceForDeclaration(file.source, container, true);
         const note = body.dedented ? dedentNote(source, file, container) : "";
 
-        return `${header}\n${[note, body.lines.join("\n")].filter((part) => part.length > 0).join("\n")}`;
+        // Only the note is optional. Filtering the source lines would drop blank lines, and with them the
+        // one-to-one correspondence between a rendered line and a source line that the offset mapping needs.
+        const parts = note.length > 0 ? [header, note, ...body.lines] : [header, ...body.lines];
+
+        return {
+            text: parts.join("\n"),
+            file,
+            sourceStart: body.startLine,
+            prelude: note.length > 0 ? 2 : 1,
+        };
     }
 
     const children = showChildren(container);
@@ -511,7 +548,12 @@ function renderContainer(
     if (children.length === 0) {
         body.push("  # no public members");
 
-        return [`${header} · no public members`, ...body].join("\n");
+        return {
+            text: [`${header} · no public members`, ...body].join("\n"),
+            file,
+            sourceStart: container.range.startLine,
+            prelude: 1,
+        };
     }
 
     body.push(
@@ -520,7 +562,12 @@ function renderContainer(
         ),
     );
 
-    return [`${header} · ${children.length} member(s)`, ...body].join("\n");
+    return {
+        text: [`${header} · ${children.length} member(s)`, ...body].join("\n"),
+        file,
+        sourceStart: container.range.startLine,
+        prelude: 1,
+    };
 }
 
 function renderLeafGroup(
@@ -528,8 +575,8 @@ function renderLeafGroup(
     declarations: readonly Declaration[],
     fileOf: ReadonlyMap<Declaration, ParsedFile>,
     detail: CodeDetail,
-): string {
-    const blocks: string[] = [];
+): ShowBlock[] {
+    const blocks: ShowBlock[] = [];
     const definitions = declarations.filter((declaration) => declaration.isDefinition);
     const declarationsOnly = declarations.filter((declaration) => !declaration.isDefinition);
 
@@ -542,7 +589,7 @@ function renderLeafGroup(
             }
         }
 
-        return blocks.join("\n\n");
+        return blocks;
     }
 
     for (const declaration of declarationsOnly) {
@@ -562,10 +609,14 @@ function renderLeafGroup(
     }
 
     if (definitions.length === 0 && declarations[0] !== undefined) {
-        blocks.push(`# no definition found for ${declarations[0].qualifiedName} in this path`);
+        blocks.push({
+            text: `# no definition found for ${declarations[0].qualifiedName} in this path`,
+            sourceStart: declarations[0].range.startLine,
+            prelude: 1,
+        });
     }
 
-    return blocks.join("\n\n");
+    return blocks;
 }
 
 function renderLeaf(
@@ -573,7 +624,7 @@ function renderLeaf(
     declaration: Declaration,
     fileOf: ReadonlyMap<Declaration, ParsedFile>,
     mode: "signature" | "full",
-): string | undefined {
+): ShowBlock | undefined {
     const file = fileOf.get(declaration);
 
     if (file === undefined) {
@@ -584,13 +635,130 @@ function renderLeaf(
     const header = `# ${pathRange(source.displayPath(file.path), declaration.range)} · ${declarationHeading(declaration)} · ${status}`;
 
     if (mode === "signature") {
-        return `${header}\n  ${declaration.signature}`;
+        return {
+            text: `${header}\n  ${declaration.signature}`,
+            file,
+            sourceStart: declaration.range.startLine,
+            prelude: 1,
+        };
     }
 
     const body = sourceForDeclaration(file.source, declaration, true);
     const note = body.dedented ? dedentNote(source, file, declaration) : "";
 
-    return `${header}\n${[note, body.lines.join("\n")].filter((part) => part.length > 0).join("\n")}`;
+    // Only the note is optional. Filtering the source lines would drop blank lines, and with them the
+    // one-to-one correspondence between a rendered line and a source line that the offset mapping needs.
+    const parts = note.length > 0 ? [header, note, ...body.lines] : [header, ...body.lines];
+
+    return {
+        text: parts.join("\n"),
+        file,
+        sourceStart: body.startLine,
+        prelude: note.length > 0 ? 2 : 1,
+    };
+}
+
+/**
+ * Turn a requested source line into the body-line offset `renderWithinBudget` pages by.
+ *
+ * The first block's file is the reference: `show` names one symbol, and a declaration and its definition in two files
+ * are rare enough that a page starting in the second one is better than a page starting nowhere. A line before the
+ * first block starts at the top; a line past the last block asks for the end, which the renderer reports.
+ */
+function sourceLineToBodyOffset(
+    blocks: readonly ShowBlock[],
+    starts: readonly number[],
+    requested: number,
+    firstFile: ParsedFile | undefined,
+): number {
+    const first = blocks.findIndex((block) => block.file?.path === firstFile?.path);
+
+    if (requested <= 0 || first === -1) {
+        return Math.max(0, requested);
+    }
+
+    const firstBlock = blocks[first];
+
+    if (firstBlock === undefined || requested <= firstBlock.sourceStart) {
+        return starts[first] ?? 0;
+    }
+
+    for (let index = first; index < blocks.length; index += 1) {
+        const block = blocks[index];
+
+        if (block === undefined || block.file?.path !== firstFile?.path) {
+            continue;
+        }
+
+        if (requested <= block.sourceStart + Math.max(0, blockSourceLines(block) - 1)) {
+            return (starts[index] ?? 0) + block.prelude + (requested - block.sourceStart);
+        }
+    }
+
+    return bodyLineTotal(blocks, starts);
+}
+
+/** The next page's first source line, or a body-line note when no block owns the offset. */
+function showNextNote(
+    source: CodeSource,
+    fitted: BudgetedText,
+    blocks: readonly ShowBlock[],
+    starts: readonly number[],
+    firstFile: ParsedFile | undefined,
+): string | undefined {
+    if (fitted.nextOffset === undefined) {
+        return undefined;
+    }
+
+    const index = blockIndexAt(starts, blocks, fitted.nextOffset);
+    const block = blocks[index];
+    const start = starts[index] ?? 0;
+
+    if (block === undefined) {
+        return nextOffsetNote(fitted);
+    }
+
+    const line = block.sourceStart + Math.max(0, fitted.nextOffset - start - block.prelude);
+    const where =
+        block.file === undefined || block.file.path === firstFile?.path
+            ? undefined
+            : source.displayPath(block.file.path);
+
+    return nextOffsetNote(fitted, { offset: line, where, sourceLine: true });
+}
+
+/** The block a body-line lands in, including the blank line between two blocks. */
+function blockIndexAt(
+    starts: readonly number[],
+    blocks: readonly ShowBlock[],
+    offset: number,
+): number {
+    for (let index = 0; index < blocks.length; index += 1) {
+        const start = starts[index] ?? 0;
+        const end = start + (blocks[index]?.text.split("\n").length ?? 0);
+
+        if (offset < end) {
+            return index;
+        }
+
+        const nextStart = starts[index + 1];
+
+        if (nextStart !== undefined && offset < nextStart) {
+            return index + 1;
+        }
+    }
+
+    return blocks.length - 1;
+}
+
+function blockSourceLines(block: ShowBlock): number {
+    return Math.max(0, block.text.split("\n").length - block.prelude);
+}
+
+function bodyLineTotal(blocks: readonly ShowBlock[], starts: readonly number[]): number {
+    const last = blocks.at(-1);
+
+    return last === undefined ? 0 : (starts.at(-1) ?? 0) + last.text.split("\n").length;
 }
 
 /**
@@ -778,13 +946,14 @@ function notFound(
     requested: readonly string[],
     elsewhere: readonly string[],
     hintNotes: readonly string[] = [],
+    scopeNote?: string,
 ): string {
     const next =
         '# next: outline(action="digest", path=...) to see the available declarations, or outline(action="usages", ...) for references';
 
     return bodyThenFooter(
         [`# not found: ${requested.join(", ")} in ${scopeLabel(scope)}`],
-        [...hintNotes, ...elsewhere, ...(elsewhere.length === 0 ? [next] : [])],
+        [scopeNote, ...hintNotes, ...elsewhere, ...(elsewhere.length === 0 ? [next] : [])],
     );
 }
 

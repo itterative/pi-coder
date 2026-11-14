@@ -443,10 +443,12 @@ costs what `usages` costs, and imports are cached per `ParsedFile` so an edited 
   says why the map replaced the declarations (`declarations exceed the N-char limit; showing the map`).
 - **Paging.** A cut result ends with `# next: offset=N` *and* how many body lines remain, because the step between
   pages is set by the character budget rather than a line count: `# next: offset=19 · 111 of 130 line(s) left · raise
-  limit to fit more per call`. When a page stops inside a block, `# omitted N more block(s) after this body` names the
-  blocks it never reached, and a multi-symbol `show` prints one index line per resolved symbol before any body, so a
-  cut body cannot make a symbol look missing. For a body over roughly 40 lines, the cheaper path is the span: every
-  header carries `path:start-end`, and `read offset=start limit=n` fetches it in one call.
+  limit to fit more per call`. `show` is the one action whose offset is a **source line**, not a body line: its note
+  reads `offset=550 of src/x.cpp (source line)`, and both the number and the file can be handed to
+  `read path=src/x.cpp offset=550` unchanged. When a page stops inside a block, `# omitted N more block(s) after this
+  body` names the blocks it never reached, and a multi-symbol `show` prints one index line per resolved symbol before
+  any body, so a cut body cannot make a symbol look missing. For a body over roughly 40 lines, the cheaper path is the
+  span: every header carries `path:start-end`, and `read offset=start limit=n` fetches it in one call.
 - `show` defaults to `full` for functions/fields and `signatures` for containers; `detail` overrides that.
   Containers in signatures mode show only public members. `show` keeps signatures intact, while digest shortens
   long ones. Extracted source is dedented by the declaration's own indentation so nested members read cleanly;
@@ -679,13 +681,17 @@ selection, the index layout, and the measured build cost (~10 ms per vector on a
 - Defaults: 4,000-character `limit`, 1 MB file cap, 2k-file discovery cap, build/third-party/generated
   directories ignored, and a 2Q parsed-file cache (2,000 entries / 64 MiB) keyed by path + mtime + size.
 - Cut output is resumable. Every action accepts `limit` in characters and `offset` in rendered body lines
-  (the header is repeated, not counted). A cut result ends with `# next: offset=N`; pass that offset with the
-  same action, path, query, and `limit` to continue. Pages prefer whole declaration/match/section
+  (the header is repeated, not counted) — except `show`, whose offset is a source line so the continuation is a
+  `read` recipe. A cut result ends with `# next: offset=N`; pass that offset with the same action, path, query, and
+  `limit` to continue. Pages prefer whole declaration/match/section
   blocks, but can resume inside one oversized block when necessary. An offset beyond the end says so. A single
   source line longer than `limit` cannot be split by a line offset; that page reports the approximate `limit`
   needed.
 - Scanning `.` honors the working tree's `.gitignore`; an explicitly named subdirectory is scanned literally,
-  so a fixture under an ignored path still works. The built-in build/third-party list applies either way.
+  so a fixture under an ignored path still works. The built-in build/third-party list applies either way. A
+  zero-hit under that default scope carries `# note: the default scan skips ignored paths (…); pass path= to search
+  one`, so "not found" is not read as "not in this project" — the `.pi/local/…` blind spot that sent a real search
+  to `rg`.
 
 ## Tests
 

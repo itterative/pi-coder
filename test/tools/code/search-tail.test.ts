@@ -108,6 +108,19 @@ describe("outline search relevance tail", () => {
         expect(result.text).toContain("# semantic: enable semantic search");
     });
 
+    it("says the default scan skipped ignored paths when only guesses came back", async () => {
+        const result = await runSearch(
+            source(),
+            { action: "search", query: "nothing_matches_this" },
+            undefined,
+            semanticRanking("promote"),
+        );
+
+        // A guess is not a match, so the zero-literal answer still carries the scope note.
+        expect(result.text).toContain("no literal matches");
+        expect(result.text).toContain("the default scan skips ignored paths");
+    });
+
     it("keeps the tail out of the way when names already answer", async () => {
         const result = await runSearch(
             source(),

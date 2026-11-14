@@ -502,6 +502,8 @@ export function isContainer(kind: Declaration["kind"]): boolean {
 /** Exact source for a declaration range, with an adjacent doc comment when `includeDocs` is set. */
 export interface DeclarationSource {
     lines: string[];
+    /** Source line of `lines[0]`, which is the doc comment when one was included. */
+    startLine: number;
     /** True when the declaration's own indentation was removed, so the text no longer matches the file bytes. */
     dedented: boolean;
 }
@@ -531,7 +533,20 @@ export function sourceForDeclaration(
         ...sliceSource(source, declaration.range.startIndex, declaration.range.endIndex, indent),
     );
 
-    return { lines, dedented: indent.length > 0 };
+    return { lines, startLine: lineOf(source, anchor), dedented: indent.length > 0 };
+}
+
+/** 1-based line number of a byte index. */
+function lineOf(source: string, index: number): number {
+    let line = 1;
+    let cursor = source.indexOf("\n");
+
+    while (cursor !== -1 && cursor < index) {
+        line += 1;
+        cursor = source.indexOf("\n", cursor + 1);
+    }
+
+    return line;
 }
 
 /**
@@ -771,15 +786,52 @@ function omittedAfter(
  * It names what is left in lines as well as the next offset, because the page step is set by the character budget,
  * not by a line count: without the remaining count, a caller cannot tell whether one call or eight remain.
  */
-export function nextOffsetNote(fitted: BudgetedText): string | undefined {
+export function nextOffsetNote(
+    fitted: BudgetedText,
+    options: { offset?: number; where?: string; sourceLine?: boolean; unit?: string } = {},
+): string | undefined {
     if (fitted.nextOffset === undefined) {
         return undefined;
     }
 
+    const offset = options.offset ?? fitted.nextOffset;
+    const where = options.where === undefined ? "" : ` of ${options.where}`;
+    const marker = options.sourceLine === true ? " (source line)" : "";
+    const unit = options.unit ?? "body line";
     const scope =
-        fitted.remaining > 0 ? ` · ${fitted.remaining} of ${fitted.total} body line(s) left` : "";
+        fitted.remaining > 0 ? ` · ${fitted.remaining} of ${fitted.total} ${unit}(s) left` : "";
 
-    return `# next: offset=${fitted.nextOffset}${scope} · raise limit to fit more per call`;
+    return `# next: offset=${offset}${where}${marker}${scope} · raise limit to fit more per call`;
+}
+
+/**
+ * A zero-hit under the default scope is not proof the symbol is absent from the project.
+ *
+ * The scan rooted at the cwd honors ignore files and the built-in build list, while a named path is read literally
+ * (see `scanLiterally` in `source.ts`). Saying so only when the caller did not name a path keeps it off the common
+ * call; saying it on an empty result is when the reader otherwise reaches for `rg`.
+ */
+export function defaultScopeNote(path: string | undefined): string | undefined {
+    const named = path?.trim() ?? "";
+
+    if (named.length > 0 && named !== ".") {
+        return undefined;
+    }
+
+    return "# note: the default scan skips ignored paths (ignore files, node_modules, build, third_party); pass path= to search one";
+}
+
+/** Body-line index of each block's first line, matching `renderWithinBudget`'s layout. */
+export function blockLineStarts(blocks: readonly string[]): number[] {
+    const starts: number[] = [];
+    let start = 0;
+
+    for (const block of blocks) {
+        starts.push(start);
+        start += block.split("\n").length + 1;
+    }
+
+    return starts;
 }
 
 function layBlocks(blocks: readonly string[]): LaidBlock[] {

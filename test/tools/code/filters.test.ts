@@ -299,3 +299,29 @@ describe("outline kind filter", () => {
         expect(result.text).toContain("kind=function");
     });
 });
+
+describe("outline default scope note", () => {
+    it("explains the skipped ignored paths when the default scan finds nothing", async () => {
+        const search = await runSearch(source(), { action: "search", query: "nothinghere" });
+
+        expect(search.text).toContain("the default scan skips ignored paths");
+
+        const show = await runShow(source(), { action: "show", query: "nothinghere" });
+
+        expect(show.text).toContain("the default scan skips ignored paths");
+
+        const usages = await runUsages(source(), { action: "usages", query: "nothinghere" });
+
+        expect(usages.text).toContain("the default scan skips ignored paths");
+    });
+
+    it("stays quiet when the caller named a path", async () => {
+        const search = await runSearch(source(), {
+            action: "search",
+            path: "src",
+            query: "nothinghere",
+        });
+
+        expect(search.text).not.toContain("the default scan skips ignored paths");
+    });
+});
