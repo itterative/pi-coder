@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { clearCodeCache, loadParsedFile } from "../../../src/tools/code/load";
 import { createSemanticSearch } from "../../../src/tools/code/semantic";
 import { rankBm25, tokenize } from "../../../src/tools/code/semantic/bm25";
-import { aboveFloor, RELATED_FLOOR_RATIO } from "../../../src/tools/code/semantic/rank";
 import { declarationDoc, embedTextOf } from "../../../src/tools/code/text";
 import type { ParsedFile } from "../../../src/tools/code/types";
 import { MemoryCodeSource } from "../../helpers/code-source";

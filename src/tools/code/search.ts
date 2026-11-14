@@ -25,12 +25,14 @@ import {
     scopeLabel,
     shortLine,
     shortSignature,
+    withinScopeLabel,
     type BudgetedText,
 } from "./format";
 import { fuzzyLimit, fuzzyNameDistance } from "./fuzzy";
-import { DEFAULT_CHAR_LIMIT } from "./languages";
+import { DEFAULT_CHAR_LIMIT, SUPPORTED_LANGUAGE_NAMES } from "./languages";
 import { loadParsedFiles } from "./load";
 import { withinLine, withinResolution, withinScope } from "./scope";
+import type { WithinScope } from "./scope";
 import { tokenize } from "./semantic/bm25";
 import { stem } from "./stem";
 import type { CodeChunk } from "./semantic/chunks";
@@ -179,7 +181,7 @@ export async function runSearch(
 
     if (discovery.unsupportedRoot) {
         return {
-            text: `# search ${quotedForMessage(query)} · unsupported file\n# no supported declarations to search`,
+            text: `# search ${quotedForMessage(query)} · unsupported file\n# no supported declarations to search · outline parses ${SUPPORTED_LANGUAGE_NAMES}`,
             files: 0,
             parseErrors: 0,
             truncated: false,
@@ -277,13 +279,6 @@ export async function runSearch(
     const literalAll = await timing.measure("search", () => collectLiteral(parsed, query, signal));
     const literal = literalAll.filter(ownsKind);
     const docMatches = literal.reduce((count, hit) => count + (isDocTier(hit.tier) ? 1 : 0), 0);
-    // Counted apart from body doc text because the rows are labelled apart: a summary that calls a `[frontmatter]`
-    // row "by doc text" describes the same rows with two names.
-    const frontmatterMatches = literal.reduce(
-        (count, hit) =>
-            count + (hit.declaration?.kind === "frontmatter" && isDocTier(hit.tier) ? 1 : 0),
-        0,
-    );
     // Literal body text: exact evidence, gated on query shape rather than on the lexical pass, because a strong
     // name match says nothing about whether the error string the caller remembers lives somewhere else.
     const bodyQuery =
@@ -363,12 +358,25 @@ export async function runSearch(
     const lexicalRest = [...literalRows, ...standaloneBody, ...commentRows, ...fuzzyHits].filter(
         (hit) => !relatedKeys.has(hitKey(hit)),
     );
-    const hits = leads ? relatedLedPage(related, lexicalRest) : [...lexicalRest, ...related];
+    const ranked = leads ? relatedLedPage(related, lexicalRest) : [...lexicalRest, ...related];
+    // One heading per file. A related-led page lists its guesses, then the literal rows, so a file that contributed
+    // to both used to head two blocks and the repeat read as a second file. Grouping by first appearance keeps the
+    // ranked order of files — the file whose guess led still leads — and keeps the page's row offsets ascending.
+    const hits = groupHitsByFile(ranked);
     const total = hits.length;
     // A related row is a guess ranked by similarity, so it must not be counted as a match: "3 matches" over three
     // guesses is the one number in this output an agent will repeat as a fact.
     const literalTotal = hits.filter((hit) => hit.tier !== TIER_RELATED).length;
-    const displaced = displacedNote(source, leads, related.length, hits, literalTotal);
+    // The channel tallies describe the rows the page carries, not the candidates the channels collected: a doc-tier
+    // row the related tail also ranked is displayed as a guess, so counting it as a doc match made the summary read
+    // `2 matches · 4 by doc text`. The evidence gates above still see the undeduped list.
+    const literalOnPage = hits.filter((hit) => hit.tier !== TIER_RELATED);
+    const docOnPage = literalOnPage.filter((hit) => isDocTier(hit.tier));
+    const frontmatterOnPage = docOnPage.filter(
+        (hit) => hit.declaration?.kind === "frontmatter",
+    ).length;
+    const bodyOnPage = literalOnPage.filter((hit) => hit.tier === TIER_BODY).length;
+    const commentOnPage = literalOnPage.filter((hit) => hit.tier === TIER_COMMENT).length;
     const approximate = fuzzyHits.length > 0;
     const filter = filterNote({
         path: target.pattern,
@@ -378,6 +386,7 @@ export async function runSearch(
         kindCounts: kind === undefined ? undefined : declarationKindCounts(parsed),
     });
     const within = scoped === undefined ? undefined : withinLine(source, scoped.scope);
+    const withinLabel = headerWithinLabel(source, scoped?.scope);
 
     if (total === 0) {
         const reason =
@@ -401,15 +410,16 @@ export async function runSearch(
 
     const header = headerFor(
         scope,
+        withinLabel,
         parsed.length,
         languages,
         query,
         literalTotal,
         approximate,
-        docMatches - frontmatterMatches,
-        frontmatterMatches,
-        bodyRows.length,
-        commentMatches,
+        docOnPage.length - frontmatterOnPage,
+        frontmatterOnPage,
+        bodyOnPage,
+        commentOnPage,
         related.length,
     );
     const rows = hits.map((hit) => ({
@@ -418,12 +428,13 @@ export async function runSearch(
     }));
     const body = groupBlocks(rows);
     const fitted = renderWithinBudget(header, body.blocks, limit, offset, { headings: true });
-    const pageEnd = fitted.nextOffset ?? Number.POSITIVE_INFINITY;
-    const relatedVisible = rows.some(
-        (_, index) =>
-            hits[index]?.tier === TIER_RELATED &&
-            (body.starts[index] ?? -1) >= fitted.offset &&
-            (body.starts[index] ?? -1) < pageEnd,
+    const visible = visibleChannels(hits, body.starts, fitted);
+    const displaced = displacedNote(
+        source,
+        leads,
+        related.length,
+        literalTotal,
+        visible.firstHiddenLiteral,
     );
     const footer = footerFor({
         approximate,
@@ -432,14 +443,15 @@ export async function runSearch(
         shown: total,
         approximateTotal: fuzzy?.total ?? 0,
         relatedMatches: related.length,
-        relatedVisible,
-        bodyMatches: bodyMatches,
+        relatedVisible: visible.relatedVisible,
+        bodyMatches: bodyOnPage,
         bodyWithheld,
-        commentMatches,
+        commentMatches: commentOnPage,
         commentWithheld,
         displacedLiteral: displaced,
         filter,
         within,
+        page: pageNote(total, body.starts, fitted),
         more: moreNote(rows, body.starts, fitted),
     });
     const hint = related.length > 0 && semantic?.hint !== undefined ? [semantic.hint] : [];
@@ -950,6 +962,32 @@ function groupBlocks(rows: readonly RenderedRow[]): { blocks: string[]; starts: 
     return { blocks, starts };
 }
 
+/**
+ * The page's rows, one block per file.
+ *
+ * A related-led page lists its guesses, then the literal rows, so a file that contributed to both headed two blocks
+ * and the repeated path read as a second file. Grouping by first appearance keeps the ranked order of files — the
+ * file whose guess led still leads — while every row for a file sits under one heading and the block offsets used for
+ * paging stay ascending.
+ */
+function groupHitsByFile(hits: readonly SearchHit[]): SearchHit[] {
+    const byPath = new Map<string, SearchHit[]>();
+
+    for (const hit of hits) {
+        const rows = byPath.get(hit.file.path);
+
+        if (rows === undefined) {
+            byPath.set(hit.file.path, [hit]);
+
+            continue;
+        }
+
+        rows.push(hit);
+    }
+
+    return Array.from(byPath.values()).flat();
+}
+
 function renderHit(hit: SearchHit): string {
     const location = `:${hitRange(hit)}`;
 
@@ -1035,30 +1073,55 @@ function rowColumns(declaration: Declaration, location: string): string[] {
 }
 
 /**
+ * Which channels the fitted page actually shows.
+ *
+ * The related legend and the `# also:` note describe rows the caller can read, so they are decided from the page the
+ * character budget produced, not from the result the channels collected.
+ */
+function visibleChannels(
+    hits: readonly SearchHit[],
+    starts: readonly number[],
+    fitted: BudgetedText,
+): { relatedVisible: boolean; firstHiddenLiteral: SearchHit | undefined } {
+    const end = fitted.nextOffset ?? Number.POSITIVE_INFINITY;
+    const onPage = (index: number): boolean => {
+        const start = starts[index] ?? -1;
+
+        return start >= fitted.offset && start < end;
+    };
+    const relatedVisible = hits.some((hit, index) => hit.tier === TIER_RELATED && onPage(index));
+    const literalVisible = hits.some((hit, index) => hit.tier !== TIER_RELATED && onPage(index));
+
+    return {
+        relatedVisible,
+        // A literal row on the page needs no note: naming a row the caller can already see repeats it.
+        firstHiddenLiteral: literalVisible
+            ? undefined
+            : hits.find((hit) => hit.tier !== TIER_RELATED),
+    };
+}
+
+/**
  * A literal row the related-led page pushed below its guesses.
  *
  * The related-led order is a measured decision (a plain doc tier answers prose queries worse than similarity does), so
- * it stays. What must not happen is the one row with real evidence being paged out unseen, so the footer names it.
- * Only when related rows actually lead: a literal-led page has the row where it belongs.
+ * it stays. What must not happen is the one row with real evidence being paged out unseen, so the footer names it —
+ * but only when the page really cannot show it: a row the caller can already read needs no second mention.
  */
 function displacedNote(
     source: CodeSource,
     leads: boolean,
     relatedTotal: number,
-    hits: readonly SearchHit[],
     literalTotal: number,
+    firstHiddenLiteral: SearchHit | undefined,
 ): string | undefined {
     // "Literal rows follow the related guesses" is false when the tail came back empty — a prose query does that
     // whenever every candidate falls below the floor — and a note about guesses the page cannot show is noise.
-    if (!leads || relatedTotal === 0 || literalTotal === 0) {
+    if (!leads || relatedTotal === 0 || literalTotal === 0 || firstHiddenLiteral === undefined) {
         return undefined;
     }
 
-    return displacedLiteral(
-        source,
-        literalTotal,
-        hits.find((hit) => hit.tier !== TIER_RELATED),
-    );
+    return displacedLiteral(source, literalTotal, firstHiddenLiteral);
 }
 
 function displacedLiteral(
@@ -1236,8 +1299,27 @@ function wantsRelatedChannel(query: ParsedQuery, fuzzyCount: number): boolean {
     return fuzzyCount === 0 && query.raw.replace(/"/g, "").length > 1;
 }
 
+/**
+ * The compact scope phrase for the header, or nothing when the call is not scoped.
+ *
+ * The header is read before the footer, and `search "x" in src` over six imports is the same misreading the
+ * `# within:` line exists to prevent.
+ */
+function headerWithinLabel(source: CodeSource, scope: WithinScope | undefined): string | undefined {
+    if (scope === undefined) {
+        return undefined;
+    }
+
+    return withinScopeLabel({
+        direction: scope.direction,
+        anchor: source.displayPath(scope.anchor),
+        relativeTo: scope.relativeTo,
+    });
+}
+
 function headerFor(
     scope: string,
+    within: string | undefined,
     fileTotal: number,
     languages: string,
     query: ParsedQuery,
@@ -1259,7 +1341,7 @@ function headerFor(
         relatedMatches,
     );
 
-    return `# search ${quotedForMessage(query)} in ${scopeLabel(scope)} · ${fileCount(fileTotal)} · ${languages} · ${summary}`;
+    return `# search ${quotedForMessage(query)} in ${scopeLabel(scope)}${within === undefined ? "" : ` within ${within}`} · ${fileCount(fileTotal)} · ${languages} · ${summary}`;
 }
 
 /**
@@ -1329,6 +1411,7 @@ function footerFor(options: {
     displacedLiteral: string | undefined;
     filter: string | undefined;
     within: string | undefined;
+    page: string | undefined;
     more: string | undefined;
 }): string[] {
     const footer: string[] = [];
@@ -1370,6 +1453,10 @@ function footerFor(options: {
         footer.push(options.more);
     }
 
+    if (options.page !== undefined) {
+        footer.push(options.page);
+    }
+
     if (options.filter !== undefined) {
         footer.push(options.filter);
     }
@@ -1406,6 +1493,37 @@ function footerFor(options: {
 
 function counted(count: number, noun: string): string {
     return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * The rows this page actually shows.
+ *
+ * The header counts the whole result: the channels are a fact about everything the query matched, and the page is a
+ * character budget. Without this line `38 matches · 5 by doc text` over eight rows reads as a contradiction, and the
+ * caller cannot tell a short result from a shortened one.
+ */
+function pageNote(
+    total: number,
+    starts: readonly number[],
+    fitted: BudgetedText,
+): string | undefined {
+    const end = fitted.nextOffset;
+
+    if (end === undefined && fitted.offset === 0) {
+        return undefined;
+    }
+
+    const limit = end ?? Number.POSITIVE_INFINITY;
+    const shown = starts.filter((start) => start >= fitted.offset && start < limit).length;
+
+    if (shown === 0) {
+        return `# page: no rows at this offset · ${counted(total, "row")} in the result`;
+    }
+
+    const first = starts.findIndex((start) => start >= fitted.offset);
+    const start = (first < 0 ? 0 : first) + 1;
+
+    return `# page: rows ${start}-${start + shown - 1} of ${total} · the header counts the whole result`;
 }
 
 /**

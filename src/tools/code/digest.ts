@@ -14,7 +14,7 @@ import {
     renderWithinBudget,
     scopeLabel,
 } from "./format";
-import { DEFAULT_CHAR_LIMIT, MAX_FILES, sizeLabel } from "./languages";
+import { DEFAULT_CHAR_LIMIT, MAX_FILES, SUPPORTED_LANGUAGE_NAMES, sizeLabel } from "./languages";
 import { loadParsedFiles } from "./load";
 import type { CodeSource } from "./source";
 import { CallTiming } from "./timing";
@@ -57,7 +57,7 @@ export async function runDigest(
 
     if (discovery.unsupportedRoot) {
         return {
-            text: `# digest ${scope} · unsupported file\n# no supported declarations to map`,
+            text: `# digest ${scope} · unsupported file\n# no supported declarations to map · outline parses ${SUPPORTED_LANGUAGE_NAMES}`,
             files: 0,
             parseErrors: 0,
             truncated: false,
@@ -190,7 +190,14 @@ export async function runDigest(
     // A kind filter must not degrade to the directory map: the caller asked for declarations of one kind, and a map of
     // directory names answers a different question. Page the flat list instead, so the `# next:` call continues it.
     if (!fits && !discovery.rootIsFile && kind === undefined) {
-        const map = renderDirectoryMap(source, root, parsed, limit, scope);
+        const map = renderDirectoryMap(
+            source,
+            root,
+            parsed,
+            limit,
+            scope,
+            target.pattern !== undefined,
+        );
 
         if (map !== undefined) {
             // A map is a summary, not a list: paging it yields one directory per call, and the legend alone can fill
@@ -586,6 +593,13 @@ function renderDirectoryMap(
     parsed: readonly ParsedFile[],
     limit: number,
     scope: string,
+    /**
+     * Name every file by its path from the searched root instead of by its basename.
+     *
+     * A pattern target (`src/tui/*.ts`) puts every match directly in one directory, so the basename labels named no
+     * directory at all and `list-view.ts (74)` was the whole answer to a pattern that started with `src/tui/`.
+     */
+    namedByPath: boolean,
 ): string | undefined {
     const directories = new Map<string, MapDirectory>();
     const rootFiles: MapFile[] = [];
@@ -599,7 +613,9 @@ function renderDirectoryMap(
 
         const parts = relative.split(path.sep);
         const entry: MapFile = {
-            label: parts.at(-1) ?? relative,
+            label: namedByPath
+                ? mapLabelFromRoot(source, root, file.path)
+                : (parts.at(-1) ?? relative),
             declarations: file.all.length,
         };
 
@@ -646,7 +662,9 @@ function renderDirectoryMap(
         return renderFlatMap(
             header,
             parsed.map((file) => ({
-                label: mapRelativeLabel(root, file.path),
+                label: namedByPath
+                    ? mapLabelFromRoot(source, root, file.path)
+                    : mapRelativeLabel(root, file.path),
                 declarations: file.all.length,
             })),
         );
@@ -840,6 +858,25 @@ function mapRelativeLabel(root: string, target: string): string {
     const label = relative.length === 0 ? path.basename(target) : relative;
 
     return label.split(path.sep).join("/");
+}
+
+/** The path a pattern target shows: from the searched root outward, not just the file name. */
+function mapLabelFromRoot(source: CodeSource, root: string, target: string): string {
+    const relative = path.relative(root, target);
+    const directory = source.displayPath(root);
+
+    if (
+        relative.length === 0 ||
+        path.isAbsolute(relative) ||
+        relative.startsWith(`..${path.sep}`)
+    ) {
+        return source.displayPath(target);
+    }
+
+    // `.` is the cwd itself: prefixing it would print `./src/net/socket.ts`.
+    const prefix = directory === "." ? [] : [directory];
+
+    return [...prefix, ...relative.split(path.sep)].join("/");
 }
 
 interface NameLine {

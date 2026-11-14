@@ -360,15 +360,16 @@ The bare form is `imports`; `dependents:` flips to the files that import the anc
 against the literal prefix of `path`, which is what makes `within="pager.ts"` under `path=src/tui` the short form.
 A caller who writes the path as it reads from the cwd instead — `within="src/tui/pager.ts"` — would otherwise
 double-prefix into a file that does not exist, so that reading is tried when the documented one is *missing* (never
-when it resolved, never for another failure), and the footer says which reading applied (`# within: imports of
-src/tui/pager.ts (relative to cwd) · 2 files`). When neither reading resolves, the error names both. There is no depth knob: the scope is the anchor and its direct neighbours,
-because the useful question is "what can this file actually reach" rather than a transitive closure nobody can
-read. The anchor stays in scope even when the `path` pattern would exclude it, and a neighbour that exists but
-fell outside is counted in the `# within:` footer rather than silently dropped — the same honesty rule as
-`# filter:`. Edges are the resolved imports `deps` reports, so a neighbour is real only when the scan can see its
-target; the resolution index uses the whole discovered root, not the pattern-narrowed parse set, exactly as in
-`deps`. When a pattern is active, a second unfiltered discovery supplies that root: the pattern bounds what is
-searched, not which imports are real.
+when it resolved, never for another failure), and the header and footer both say which reading applied (`# search
+… in src within imports of src/tui/pager.ts (relative to cwd) · 2 files`). The header carries the scope too, because
+it is read before the footer and a scoped result must not read as the whole tree. When neither reading resolves, the 
+error names both. There is no depth knob: the scope is the anchor and its direct neighbours, because the useful question
+is "what can this file actually reach" rather than a transitive closure nobody can read. The anchor stays in scope even
+when the `path` pattern would exclude it, and a neighbour that exists but fell outside is counted in the `# within:`
+footer rather than silently dropped — the same honesty rule as `# filter:`. Edges are the resolved imports `deps`
+reports, so a neighbour is real only when the scan can see its target; the resolution index uses the whole discovered
+root, not the pattern-narrowed parse set, exactly as in `deps`. When a pattern is active, a second unfiltered discovery
+supplies that root: the pattern bounds what is searched, not which imports are real.
 
 The scope changes what is searched, ranked, and reported, and it does change the discovery walk in one direction:
 when `within` is present `usages` discovers and parses the searched root instead of the symbol-narrowed candidate set.
@@ -441,7 +442,9 @@ costs what `usages` costs, and imports are cached per `ParsedFile` so an edited 
   hid (`# kinds: 2 enum members, 1 field hidden in signatures detail; detail=full lists all`) because that call is
   asking what is in this file; if nothing visible remains, the line replaces `# no declarations` with the reason. A
   directory digest leaves it out, since it would repeat per file. A result that shows no members at all (the
-  directory map) carries no such note, because the filter cost it nothing.
+  directory map) carries no such note, because the filter cost it nothing. **`show` says it in the block header** for
+the same reason: a container summary reads `class ListViewComponent · 8 member(s) · 13 non-public hidden
+(detail=full lists all)`, because `8 member(s)` is the number a caller repeats as the class's shape.
 - **The directory map is a tree with a fair budget.** A map of directory counts answers "where is the code" but
   not "which file", which is what a caller who named one directory usually asked. Every directory therefore gets a
   summary line and its immediate child directories as rows (`models/ 15`, `debug/ 14`) instead of flattening their
@@ -453,10 +456,15 @@ costs what `usages` costs, and imports are cached per `ParsedFile` so an edited 
   It is deliberately not `# next:`, the truncation marker, so a complete map never reads as shortened: the map is a
   summary bounded by the tree's directory count, never paged, and an `offset` into it is ignored rather than answered
   with one directory per call. The header
-  says why the map replaced the declarations (`declarations exceed the N-char limit; showing the map`).
+  says why the map replaced the declarations (`declarations exceed the N-char limit; showing the map`). A **pattern**
+  target names every file by its path from the searched root (`src/tui/list-view.ts (74)`), because a pattern puts all
+  its matches in one directory and basenames then name no directory at all.
 - **Paging.** A cut result ends with one line, `# next: N more line(s) · outline(action=…, offset=…)`: the count is
   in rendered lines, and the call is complete, so pasting it continues the same question instead of re-deriving the
-  parameters. The character `limit` sets the page size; `offset` is a rendered line, and the blank line between two
+  parameters. A shortened page also carries `# page: rows 1-6 of 38 · the header counts the whole result`, because
+  the header's tallies describe the whole result while the rows are a character budget, and eight rows under `38
+  matches` otherwise read as a contradiction. The character `limit` sets the page size; `offset` is a rendered line,
+  and the blank line between two
   blocks never starts a page. `show` is the one action whose offset is a **source line**: its note ends
   `· source line, resumable with read`, and both the number and the file can be handed to
   `read path=src/x.cpp offset=550` unchanged. A source line cannot name one of two files, and it cannot advance when
@@ -596,13 +604,20 @@ the related rows lead, because a doc tier that merely saw every content word som
 `TAIL_ROWS` of guesses could then fill the leading page and push the query's *only* literal match onto the next one,
 leaving a `# more:` note that points at the one row that was evidence. So the leading page keeps its slot: seven
 related rows, then the literal rows, then the tail's weakest guess (`relatedLedPage` in `search.ts`). A short tail
-changes nothing, since the literal rows already follow it. Because a slot can still sit below the fold, a displaced
-literal row is named in the footer (`# also: literal row follows the related guesses · path:range kind name`) rather
-than being left to a page the caller may never open.
+changes nothing, since the literal rows already follow it. Because a slot can still sit below the fold, a literal row
+the page cannot show is named in the footer (`# also: literal rows follow the related guesses · path:range kind
+name`) — and only then: a row the page already prints once is not named a second time.
+
+**One heading per file.** The page's rows are grouped by file before rendering, in the order each file first appears,
+so a related-led page that drew a guess and a literal row from one file heads it once instead of twice. The ranked
+order of files survives — the file whose guess led still leads — and the block offsets paging uses stay ascending.
 
 **Guesses are not matches.** The summary counts literal rows only: `3 matches` over three similarity guesses was the
 most dangerous number the tool printed, because an agent reads it as "the identifier exists". With no literal row the
-summary says `no literal matches · N related guesses`, and the `matches` field carries the literal count.
+summary says `no literal matches · N related guesses`, and the `matches` field carries the literal count. The
+per-channel counts (`by doc text`, `by body text`, …) are taken from the rows the page keeps, not from the candidates
+the channels collected: a doc row the related tail displaced and re-tagged is a guess on that page, so counting it as
+a doc match too made the summary read `2 matches · 4 by doc text`.
 
 A doc-comment match still leads, and the tail now follows it instead of being suppressed: the doc tier requires every
 content word of the query to appear in one declaration's prose, so it is the strongest cheap evidence there is — but a
@@ -614,7 +629,8 @@ words in a natural-language query cannot make an otherwise perfect prose match m
 **The gate is gone, so the doc row no longer stands alone.** The tail used to be suppressed whenever a doc or
 frontmatter row matched — the doc row answered alone, so `knob registry tune table` on a memory tree returned one
 `[frontmatter]` row instead of the sections the tail would have added. With the query embedding cheap enough to always
-run, the frontmatter row leads and the sections follow it; the `# also:` note still names a displaced literal row.
+run, the frontmatter row leads and the sections follow it; a literal row the page cannot show is still named by the
+`# also:` note.
 
 ### Body chunks
 

@@ -365,16 +365,32 @@ export function withinNote(options: {
     /** Set when the anchor was read from the cwd rather than from `path`'s literal prefix. */
     relativeTo?: "cwd";
 }): string {
-    const direction = options.direction === "dependents" ? "dependents of" : "imports of";
-    // Only said when the reading differed from the documented one; naming the same file twice would cost attention
-    // on every ordinary scoped call.
-    const resolved = options.relativeTo === "cwd" ? " (relative to cwd)" : "";
     const outside =
         options.outside > 0
             ? ` (${counted(options.outside, "file")} outside the searched path)`
             : "";
 
-    return `# within: ${direction} ${options.anchor}${resolved} · ${counted(options.files, "file")}${outside}`;
+    return `# within: ${withinScopeLabel(options)} · ${counted(options.files, "file")}${outside}`;
+}
+
+/**
+ * The scope phrase itself, shared by the `# within:` footer and the header line.
+ *
+ * A header that says `search "x" in src` over rows from six imports is the same misreading the footer prevents:
+ * the caller reads the header first, so the scope it was narrowed to belongs there too.
+ */
+export function withinScopeLabel(options: {
+    direction: "imports" | "dependents";
+    anchor: string;
+    /** Set when the anchor was read from the cwd rather than from `path`'s literal prefix. */
+    relativeTo?: "cwd";
+}): string {
+    const direction = options.direction === "dependents" ? "dependents of" : "imports of";
+    // Only said when the reading differed from the documented one; naming the same file twice would cost attention
+    // on every ordinary scoped call.
+    const resolved = options.relativeTo === "cwd" ? " (relative to cwd)" : "";
+
+    return `${direction} ${options.anchor}${resolved}`;
 }
 
 function hiddenSuffix(count: number, noun: string): string {

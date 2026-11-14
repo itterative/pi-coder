@@ -92,7 +92,7 @@ describe("Markdown adapter", () => {
         expect(digest.text).toContain("## Install");
         expect(digest.text).toContain("### Example");
         expect(searched.text).toContain("heading  ## Install");
-        expect(shown.text).toContain("heading Guide::Install · definition");
+        expect(shown.text).toContain("heading Guide::Install · section");
         expect(shown.text).toContain("npm install");
         expect(shown.text).not.toContain("## Usage");
     });

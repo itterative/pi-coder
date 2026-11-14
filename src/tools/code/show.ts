@@ -548,13 +548,16 @@ function renderContainer(
     }
 
     const children = showChildren(container);
+    const hidden = accessHiddenCount(container);
+    // `8 member(s)` is a number the caller repeats as the class's shape: a filtered list has to say it was filtered.
+    const hiddenNote = hidden > 0 ? ` · ${hidden} non-public hidden (detail=full lists all)` : "";
     const body = [`  ${container.signature}`];
 
     if (children.length === 0) {
         body.push("  # no public members");
 
         return {
-            text: [`${header} · no public members`, ...body].join("\n"),
+            text: [`${header} · no public members${hiddenNote}`, ...body].join("\n"),
             file,
             sourceStart: container.range.startLine,
             prelude: 1,
@@ -568,11 +571,39 @@ function renderContainer(
     );
 
     return {
-        text: [`${header} · ${children.length} member(s)`, ...body].join("\n"),
+        text: [`${header} · ${children.length} member(s)${hiddenNote}`, ...body].join("\n"),
         file,
         sourceStart: container.range.startLine,
         prelude: 1,
     };
+}
+
+/**
+ * Members a container's signature list drops for access rather than for kind.
+ *
+ * The same split `digest` reports in its `# visibility:` footer. Fields, nested variables, and enum members are the
+ * documented shape of a signature list, not a visibility rule, so they are not counted here.
+ */
+function accessHiddenCount(container: Declaration): number {
+    return container.children.filter(
+        (child) =>
+            hidesForAccess(container, child) &&
+            child.kind !== "field" &&
+            child.kind !== "variable" &&
+            child.kind !== "enumMember",
+    ).length;
+}
+
+function hidesForAccess(container: Declaration, child: Declaration): boolean {
+    if (container.kind === "class" || container.kind === "trait") {
+        return child.access !== "public";
+    }
+
+    if (container.kind === "struct" || container.kind === "union") {
+        return child.access === "private" || child.access === "protected";
+    }
+
+    return false;
 }
 
 function renderLeafGroup(
@@ -624,6 +655,15 @@ function renderLeafGroup(
     return blocks;
 }
 
+function declarationStatus(declaration: Declaration): string {
+    // A heading is a section of prose, not a definition: `heading Build · definition` read as a claim about code.
+    if (declaration.kind === "heading") {
+        return "section";
+    }
+
+    return declaration.isDefinition ? "definition" : "declaration";
+}
+
 function renderLeaf(
     source: CodeSource,
     declaration: Declaration,
@@ -636,7 +676,7 @@ function renderLeaf(
         return undefined;
     }
 
-    const status = declaration.isDefinition ? "definition" : "declaration";
+    const status = declarationStatus(declaration);
     const header = `# ${pathRange(source.displayPath(file.path), declaration.range)} · ${declarationHeading(declaration)} · ${status}`;
 
     if (mode === "signature") {

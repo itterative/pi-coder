@@ -221,6 +221,29 @@ describe("outline show", () => {
         expect(result.text).toContain("class net::Socket");
         expect(result.text).toContain("connect(const Address& addr) const");
         expect(result.text).not.toContain("int fd_  :18");
+        // A private field is the documented shape of a signature list, not a visibility hide, so it is not counted.
+        expect(result.text).not.toContain("non-public hidden");
+    });
+
+    it("counts the members its signature list hid for access", async () => {
+        const privateMembers = new MemoryCodeSource("/project", {
+            "src/secret.h": `class Secret {
+public:
+    void visible();
+
+private:
+    void hidden();
+};
+`,
+        });
+        const result = await runShow(privateMembers, {
+            action: "show",
+            path: "src",
+            query: "Secret",
+        });
+
+        // `1 member(s)` is the number the caller repeats as the class's shape; the filtered one has to be named.
+        expect(result.text).toContain("1 member(s) · 1 non-public hidden (detail=full lists all)");
     });
 
     it("returns the full class body when asked", async () => {

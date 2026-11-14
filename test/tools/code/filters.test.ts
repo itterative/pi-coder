@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { runDigest } from "../../../src/tools/code/digest";
+import { runDeps } from "../../../src/tools/code/deps";
 import { clearCodeCache } from "../../../src/tools/code/load";
 import { runSearch } from "../../../src/tools/code/search";
 import { runShow } from "../../../src/tools/code/show";
@@ -108,6 +109,45 @@ describe("outline path pattern filter", () => {
         expect(result.text).not.toContain("lib/legacy/port.ts");
         expect(result.text).toContain("# filter: path=src/net/*.ts");
         expect(result.text).not.toContain("hidden)");
+    });
+
+    it("says which languages it parses when the target is not one of them", async () => {
+        const json = new MemoryCodeSource("/project", { "data/table.json": '{"a":1}\n' });
+
+        const digested = await runDigest(json, { action: "digest", path: "data/table.json" });
+        const searched = await runSearch(json, {
+            action: "search",
+            path: "data/table.json",
+            query: "table",
+        });
+        const dependencies = await runDeps(json, { action: "deps", path: "data/table.json" });
+
+        // "Unsupported" alone reads as "found nothing"; the answer has to say why this file type is out of scope.
+        expect(digested.text).toContain("# digest data/table.json · unsupported file");
+        expect(digested.text).toContain("outline parses C/C++");
+        expect(searched.text).toContain("no supported declarations to search · outline parses");
+        expect(dependencies.text).toContain("unsupported file · outline parses");
+    });
+
+    it("names a pattern map's files by path, not by basename", async () => {
+        const result = await runDigest(source(), {
+            action: "digest",
+            path: "src/net/*.ts",
+            limit: 200,
+        });
+
+        // Every match sits in one directory, so basenames named no directory at all.
+        expect(result.text).toContain("  src/net/socket.ts (1)");
+        expect(result.text).toContain("  src/net/client.ts (1)");
+    });
+
+    it("names a slash-free pattern's matches by their path and not by `./`", async () => {
+        const result = await runDigest(source(), { action: "digest", path: "*.ts", limit: 200 });
+
+        expect(result.text).toContain("  src/net/socket.ts (1)");
+        expect(result.text).toContain("  lib/legacy/port.ts (2)");
+        expect(result.text).not.toContain("  ./");
+        expect(result.text).not.toContain("  socket.ts (1)");
     });
 
     it("filters show to the matched files", async () => {

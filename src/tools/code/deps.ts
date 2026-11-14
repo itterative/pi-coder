@@ -16,7 +16,7 @@ import {
     resolveImports,
     type ResolvedImport,
 } from "./imports";
-import { DEFAULT_CHAR_LIMIT, isSupportedPath } from "./languages";
+import { DEFAULT_CHAR_LIMIT, SUPPORTED_LANGUAGE_NAMES, isSupportedPath } from "./languages";
 import { loadParsedFiles } from "./load";
 import type { CodeSource } from "./source";
 import { CallTiming } from "./timing";
@@ -69,7 +69,9 @@ export async function runDeps(
     }
 
     if (!isSupportedPath(target)) {
-        return empty(`# deps ${source.displayPath(target)} · unsupported file`);
+        return empty(
+            `# deps ${source.displayPath(target)} · unsupported file · outline parses ${SUPPORTED_LANGUAGE_NAMES}`,
+        );
     }
 
     await source.assertReadable(target);

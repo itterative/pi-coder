@@ -271,6 +271,34 @@ describe("outline search relevance tail", () => {
         expect(promotes[0]).toMatch(/\[related \d+%\]/u);
     });
 
+    it("counts the doc rows the page shows, not the ones the tail displaced", async () => {
+        const files: Record<string, string> = {
+            "src/a.ts":
+                "/** Keeps entries in the cache alive. */\nexport function promote(): void {}\n",
+            "src/b.ts":
+                "/** Another note about entries and the cache. */\nexport function refresh(): void {}\n",
+        };
+        const semantic: SemanticSearch = {
+            hint: undefined,
+            dispose: () => undefined,
+            async rank(request) {
+                const file = request.files.find((candidate) => candidate.path.endsWith("b.ts"))!;
+
+                return [{ file, declaration: file.all[0]!, score: 1, scale: "rrf" as const }];
+            },
+        };
+        const result = await runSearch(
+            new MemoryCodeSource("/project", files),
+            { action: "search", path: "src", query: "cache entries" },
+            undefined,
+            semantic,
+        );
+
+        // `refresh` is a doc match and the tail's best guess: the page shows it once, as a guess. Counting it as a doc
+        // match too made the summary read `1 match · 2 by doc text`, a contradiction on its face.
+        expect(result.text).toContain("1 match · 1 by doc text · 1 related guess");
+    });
+
     it("does not add a hint when the tail produced nothing", async () => {
         const result = await runSearch(source(), {
             action: "search",
@@ -328,19 +356,123 @@ describe("outline search related-led page", () => {
             semantic,
         );
         const literal = result.text.indexOf("promote");
-        const weakest = result.text.indexOf("rel8");
 
+        // The order is a measured decision, but the row that is evidence stays on the page the caller reads.
         expect(literal).toBeGreaterThanOrEqual(0);
-        expect(weakest).toBeGreaterThanOrEqual(0);
-        expect(literal).toBeLessThan(weakest);
         expect(result.text).toMatch(/\[related \d+%\]/u);
         // The percentage is of the best guess in this result: the top-ranked row is 100%, the eighth is not.
         expect(result.text).toContain("[related 100%]");
         expect(result.text).toMatch(/\[related (?:[1-9]|[1-9]\d)%\]/u);
-        // The order is a measured decision, but a literal row below the guesses is never silent.
-        expect(result.text).toContain(
-            "# also: literal row follows the related guesses · src/hint.ts:2-4",
+        // A row the page shows needs no second mention in the footer.
+        expect(result.text).not.toContain("# also:");
+    });
+
+    it("heads a file once when it contributes both a guess and a literal row", async () => {
+        const files: Record<string, string> = {
+            ...FILES,
+            "src/related.ts": Array.from(
+                { length: 8 },
+                (_, index) => `export function rel${index + 1}(): void {}`,
+            ).join("\n"),
+        };
+        const semantic: SemanticSearch = {
+            hint: undefined,
+            dispose: () => undefined,
+            async rank(request) {
+                const hint = request.files.find((candidate) => candidate.path.endsWith("hint.ts"))!;
+                const related = request.files.find((candidate) =>
+                    candidate.path.endsWith("related.ts"),
+                )!;
+                const first = hint.all.find((declaration) => declaration.name === "other")!;
+
+                return [
+                    { file: hint, declaration: first, score: 1, scale: "rrf" as const },
+                    ...related.all.map((declaration, index) => ({
+                        file: related,
+                        declaration,
+                        score: 0.9 - index / 100,
+                        scale: "rrf" as const,
+                    })),
+                ];
+            },
+        };
+        const result = await runSearch(
+            new MemoryCodeSource("/project", files),
+            { action: "search", path: "src", query: "cache alive" },
+            undefined,
+            semantic,
         );
+
+        // A related-led page lists its guesses, then the literal rows. Both came from `hint.ts` here, and a second
+        // heading for the same path reads as a second file.
+        expect(result.text.split("\n").filter((line) => line === "src/hint.ts")).toHaveLength(1);
+
+        const block = result.text.slice(result.text.indexOf("src/hint.ts"));
+
+        expect(block).toContain("function other");
+        expect(block).toContain("promote");
+        expect(block.indexOf("function other")).toBeLessThan(block.indexOf("promote"));
+    });
+
+    it("counts the rows on the page separately from the header tallies", async () => {
+        const semantic: SemanticSearch = {
+            hint: undefined,
+            dispose: () => undefined,
+            async rank(request) {
+                const file = request.files.find((candidate) =>
+                    candidate.path.endsWith("related.ts"),
+                )!;
+
+                return file.all.map((declaration, index) => ({
+                    file,
+                    declaration,
+                    score: 1 / (index + 1),
+                    scale: "rrf" as const,
+                }));
+            },
+        };
+        const result = await runSearch(
+            slotSource(),
+            { action: "search", path: "src", query: "cache alive", limit: 400 },
+            undefined,
+            semantic,
+        );
+
+        // The header counts the whole result and the page is a character budget, so a short page has to say so.
+        expect(result.text).toContain("# page: rows 1-");
+        expect(result.text).toMatch(/of 9 · the header counts the whole result/u);
+        expect(result.text).toContain("# next:");
+    });
+
+    it("names a literal row the page could not show", async () => {
+        const semantic: SemanticSearch = {
+            hint: undefined,
+            dispose: () => undefined,
+            async rank(request) {
+                const file = request.files.find((candidate) =>
+                    candidate.path.endsWith("related.ts"),
+                )!;
+
+                return file.all.map((declaration, index) => ({
+                    file,
+                    declaration,
+                    score: 1 / (index + 1),
+                    scale: "rrf" as const,
+                }));
+            },
+        };
+        const result = await runSearch(
+            slotSource(),
+            { action: "search", path: "src", query: "cache alive", limit: 400 },
+            undefined,
+            semantic,
+        );
+
+        expect(result.text).toContain(
+            "# also: literal row follows the related guesses · src/hint.ts",
+        );
+        // The footer names the row; the page itself stops before it.
+        expect(result.text).not.toContain("export function promote(key: string): string");
     });
 
     it("does not promise related guesses when the tail came back empty", async () => {

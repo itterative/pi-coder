@@ -140,6 +140,10 @@ describe("outline search within a dependency neighbourhood", () => {
         expect(result.text).not.toContain("src/store/retry.ts");
         expect(result.text).not.toContain("src/store/other.ts");
         expect(result.text).toContain("# within: imports of src/app.ts · 2 files");
+        // The header names the scope too: it is read before the footer.
+        expect(result.text).toContain(
+            '# search "download" in (whole tree) within imports of src/app.ts ·',
+        );
     });
 
     it("searches the files that import the anchor with the dependents prefix", async () => {

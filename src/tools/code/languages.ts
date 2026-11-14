@@ -101,6 +101,15 @@ export const DEFAULT_IGNORE_GLOBS: readonly string[] = [
     "*.g.h",
 ];
 
+/**
+ * The languages the parser registry claims, named when a caller asks about a file none of them parses.
+ *
+ * An "unsupported file" answer without this reads as "the tool did not find anything", when the question is why a
+ * JSON or SQL file has no map. The list is the registry's, not a guess about the file.
+ */
+export const SUPPORTED_LANGUAGE_NAMES =
+    "C/C++, C#, Go, Java, JavaScript/TypeScript, Markdown, PHP, Python, Ruby, and Rust";
+
 /** The language label for a supported path, or undefined when the file is not parsed by this tool. */
 export function languageForPath(filePath: string): SupportedLanguage | undefined {
     const extension = extensionOf(filePath);

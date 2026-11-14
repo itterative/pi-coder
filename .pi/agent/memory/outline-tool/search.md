@@ -36,7 +36,8 @@ when neither resolves the error names both readings. `within` has no depth knob,
 always keeps the anchor in scope (even when the pattern excludes it), and intersects rather than replacing the tree
 filters; its resolution index covers the whole discovered root, so with an active pattern it performs a second
 unfiltered walk and a neighbour hidden by the pattern still counts as an edge and is reported as outside the
-searched path in the `# within:` footer. Edges are the `deps` graph one hop deep, and the
+searched path in the `# within:` footer, which the header also carries (`in src within imports of …`) because the
+header is read before the footer. Edges are the `deps` graph one hop deep, and the
 scope narrows what is searched/ranked, not the discovery-and-parse work — except in one direction: a `within` call
 makes `usages` parse the whole searched root instead of the symbol-narrowed candidate set, because a dependent that
 imports the anchor without naming the queried symbol is exactly the file the candidate grep never returns (that bug

@@ -42,8 +42,9 @@ exactly like the lexical hits, so a cached parse pays once and pagination is fre
 `within` on `search`/`usages` intersects the candidate files with one file's direct imports
 (`within="src/x.ts"`) or direct importers (`within="dependents:src/x.ts"`); the anchor is relative to the literal
 prefix of `path`, the directory a scoped pattern starts in. The anchor is always kept, the `path` pattern still
-bounds the tree, and the `# within:` footer names the direction, the anchor, the file count, and any neighbour that
-fell outside the searched path. Edges come from `imports.ts` (`scope.ts` builds the index), so the
+bounds the tree, and both the header and the `# within:` footer name the direction, the anchor, the file count, and
+any neighbour that fell outside the searched path — the header because it is read first, the footer because it
+closes the result. Edges come from `imports.ts` (`scope.ts` builds the index), so the
 scope is exactly the `deps` graph, one hop deep; a neighbour whose target the scan cannot see does not exist.
 Unlike `deps`, the scope does not change discovery: the searched root is parsed as usual, and the neighbourhood is
 an intersection over those parses plus the anchor. With a `path` pattern, a second unfiltered discovery supplies the

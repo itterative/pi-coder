@@ -46,7 +46,9 @@ honest boundary is "no identifier or doc comment spells it out", not "no such co
   variable is a module constant, so the file's own map keeps it. A **single-file** digest names the kind hides too
   (`# kinds: 2 enum members, 1 field hidden in signatures detail; detail=full lists all`) and, when nothing visible
   remains, replaces `# no declarations` with that explanation. A directory digest omits the kind line because it
-  would repeat per file. The directory map, which shows no members, carries no note.
+  would repeat per file. The directory map, which shows no members, carries no note. **`show` prints the same count in
+  the container header** (`class ListViewComponent · 8 member(s) · 13 non-public hidden (detail=full lists all)`),
+  because the member count is what a caller repeats as the class's shape.
 - **Narrowing is a parameter.** A `path` pattern and `kind` narrow the discovered set (`deps` takes a literal file);
   `# filter:` names them and any hidden count (`outline-tool/search.md`). A zero-hit under the default scope adds
   `# note: the default scan skips ignored paths (…); pass path= to search one`, because a named path is scanned
@@ -89,8 +91,9 @@ whose split parts all miss but whose text names a heading is used whole (announc
 - **A kind-filtered digest names the filtered-away owner** (`Port::  private void reset()`), because the flat list has
   no tree to carry it.
 - **A guess is not a match.** `search` counts literal rows only (`no literal matches · N related guesses`), folds a
-  body row's evidence onto a row that already lists its declaration, and names a literal row displaced below the
-  related ones (`# also: …`).
+  body row's evidence onto a row that already lists its declaration, and names a literal row the related-led page
+  pushed below the fold (`# also: …`) — only when the page cannot show it. The per-channel counts describe the rows the
+  page keeps: a doc row the tail displaced is a guess there, so it is not also counted `by doc text`.
 - **A file with no declarations is not empty.** `digest` counts its top-level call sites and names `flow` instead of
   saying `# no declarations`. The directory-map fallback says *why* it replaced the declarations and uses
   `# deeper:` (not `# next:`) for its descend hint, so a complete map never reads as a truncated one. The map is a
@@ -105,8 +108,11 @@ instead: `permissions*.ts` used to answer `src/ 1 file · modules/ 1` twice and 
 
 **Rows are grouped by file.** A search prints the path once as a heading, then its rows as `:range  kind  name`
 subitems indented under it, carrying the same tags. A file named on ten rows used to cost ten full paths; the grouping
-is in `groupBlocks` (`search.ts`), and `renderHit` no longer includes the path at all. The grouping is built as one
-block per file so the pager can reprint a heading. A heading row prints its literal text only (`heading  ## Install`):
+is in `groupBlocks` (`search.ts`), and `renderHit` no longer includes the path at all. `groupHitsByFile` runs first, so
+the grouping holds across channels too: a related-led page that drew a guess and a literal row from one file used to
+head it twice (the guesses render in one pass, the literal rows in another), and a repeated path reads as a second
+file. Grouping by first appearance keeps the ranked order of files and keeps the block offsets ascending for the
+pager. A heading row prints its literal text only (`heading  ## Install`):
 `Parent::Parent::Child` repeated the chain a digest map already shows by indentation, and the signature column said
 the title again. `show` still matches the chain, so the row stays addressable. A related row's score rides on
 the tag (`[related 73%]`: a cosine prints as itself, since it is already 0-1, while BM25 and fused RRF print as a
@@ -115,9 +121,11 @@ already has the line count, and two counters a line apart read as two different 
 exact line indices from `groupBlocks`, not a text match against the page. The `# related:` legend is suppressed when no
 related row is on the page (a beyond-end offset), so it never explains rows the page does not show; the header count
 stays, because that is a fact about the whole result. The same rule covers `# also:` — it names the literal row the
-related-led page pushed down, so it fires only when the tail is non-empty (`displacedNote` takes `related.length`); a
-prose query whose candidates all fell below the floor has no guesses to "follow", and the note used to promise them
-anyway.
+related-led page pushed down, so it fires only when the tail is non-empty (`displacedNote` takes `related.length`) and
+that row is not on the page, because naming a row the caller can already read repeats it. A prose query whose
+candidates all fell below the floor has no guesses to "follow", and the note used to promise them anyway. A page cut
+short also says so: `# page: rows 1-6 of 38 · the header counts the whole result` reconciles the whole-result tallies
+in the header with the rows the character budget left.
 
 **A continuation reprints the heading it lost.** `renderWithinBudget` treats each block's first line as a heading when
 the caller passes `{ headings: true }`: a page starting inside a block reprints that line, and a cut that would end
