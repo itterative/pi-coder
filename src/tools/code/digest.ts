@@ -112,6 +112,12 @@ export async function runDigest(
     const rendered = parsed.map((file) => renderFile(source, file, detail, kind));
     const kindHidden = rendered.reduce((total, entry) => total + entry.hidden, 0);
     const accessHidden = rendered.reduce((total, entry) => total + entry.accessHidden, 0);
+    const signatureHidden = new Map<DeclarationKind, number>();
+    for (const entry of rendered) {
+        for (const [hiddenKind, count] of entry.signatureHidden) {
+            signatureHidden.set(hiddenKind, (signatureHidden.get(hiddenKind) ?? 0) + count);
+        }
+    }
     const filter = filterNote({
         path: target.pattern,
         pathHidden: targeted.hidden,
@@ -150,7 +156,14 @@ export async function runDigest(
         accessHidden > 0
             ? `# visibility: ${accessHidden} non-public member(s) hidden; detail=full lists all`
             : "";
-    const fullText = [header, fullBody, footer, visibilityNote]
+    // A single-file digest is the caller asking what is in this file, so naming the kinds signatures mode left out
+    // is the difference between a map and a dead end. A directory digest would repeat the line per file, where the
+    // visibility footer and `detail="full"` already carry the general rule.
+    const signaturesNote =
+        discovery.rootIsFile && signatureHidden.size > 0
+            ? `# kinds: ${describeSignatureHides(signatureHidden)} hidden in signatures detail; detail=full lists all`
+            : "";
+    const fullText = [header, fullBody, footer, visibilityNote, signaturesNote]
         .filter((part) => part.length > 0)
         .join("\n");
     const fits = fullText.length <= limit;
@@ -203,7 +216,7 @@ export async function runDigest(
     const next = nextOffsetNote(fitted);
 
     return {
-        text: [fitted.text, next, footer, visibilityNote]
+        text: [fitted.text, next, footer, visibilityNote, signaturesNote]
             .filter((part): part is string => part !== undefined && part.length > 0)
             .join("\n"),
         files: parsed.length,
@@ -227,9 +240,26 @@ function renderFile(
 
     const lines: string[] = [];
     const huge = sizeLabel(file.lineCount) === "huge" && detail !== "full";
-    const tally: RenderTally = { accessHidden: 0 };
+    const tally: RenderTally = { accessHidden: 0, signatureHidden: new Map() };
+    const roots: Declaration[] = [];
 
-    for (const declaration of visibleRoots(file, detail)) {
+    for (const declaration of file.roots) {
+        const reason = hideReason(declaration, detail, true);
+
+        if (reason === "kind") {
+            tally.signatureHidden.set(
+                declaration.kind,
+                (tally.signatureHidden.get(declaration.kind) ?? 0) + 1,
+            );
+            continue;
+        }
+
+        if (reason === undefined) {
+            roots.push(declaration);
+        }
+    }
+
+    for (const declaration of roots) {
         if (huge) {
             lines.push(
                 declarationLine(declaration, 0, {
@@ -244,7 +274,18 @@ function renderFile(
     }
 
     if (lines.length === 0) {
-        return { text: `${header}\n  # no declarations`, hidden: 0, total, accessHidden: 0 };
+        const hidden = describeSignatureHides(tally.signatureHidden);
+
+        return {
+            text:
+                hidden === ""
+                    ? `${header}\n  # no declarations`
+                    : `${header}\n  # no declarations visible in signatures detail; ${hidden} hidden — use detail="full"`,
+            hidden: 0,
+            total,
+            accessHidden: tally.accessHidden,
+            signatureHidden: tally.signatureHidden,
+        };
     }
 
     if (huge) {
@@ -256,6 +297,7 @@ function renderFile(
         hidden: 0,
         total,
         accessHidden: tally.accessHidden,
+        signatureHidden: tally.signatureHidden,
     };
 }
 
@@ -266,6 +308,8 @@ interface RenderedFile {
     total: number;
     /** Members signatures mode left out for their access, so the footer can say so. */
     accessHidden: number;
+    /** Declarations signatures mode left out by kind, counted per kind for the single-file note. */
+    signatureHidden: ReadonlyMap<DeclarationKind, number>;
 }
 
 /**
@@ -283,7 +327,7 @@ function renderKind(
     const matched = file.all.filter((declaration) => declaration.kind === kind);
 
     if (matched.length === 0) {
-        return { text: "", hidden: total, total, accessHidden: 0 };
+        return { text: "", hidden: total, total, accessHidden: 0, signatureHidden: new Map() };
     }
 
     const lines = matched.map((declaration) =>
@@ -295,16 +339,30 @@ function renderKind(
         hidden: total - matched.length,
         total,
         accessHidden: 0,
+        signatureHidden: new Map(),
     };
-}
-
-function visibleRoots(file: ParsedFile, detail: CodeDetail): Declaration[] {
-    return file.roots.filter((declaration) => hideReason(declaration, detail, true) === undefined);
 }
 
 interface RenderTally {
     /** Class, trait, struct, and union members that signatures mode dropped for their access. */
     accessHidden: number;
+    /** Declarations signatures mode dropped by kind, counted per kind. */
+    signatureHidden: Map<DeclarationKind, number>;
+}
+
+/** "2 enum members, 1 field" — the kinds a single-file digest left out, largest group first. */
+function describeSignatureHides(counts: ReadonlyMap<DeclarationKind, number>): string {
+    return [...counts.entries()]
+        .filter(([, count]) => count > 0)
+        .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+        .map(([kind, count]) => {
+            if (kind === "enumMember") {
+                return count === 1 ? "1 enum member" : `${count} enum members`;
+            }
+
+            return count === 1 ? `1 ${kind}` : `${count} ${kind}s`;
+        })
+        .join(", ");
 }
 
 function renderDeclaration(
@@ -326,6 +384,11 @@ function renderDeclaration(
         if (reason !== undefined) {
             if (reason === "access") {
                 tally.accessHidden += 1;
+            } else {
+                tally.signatureHidden.set(
+                    child.kind,
+                    (tally.signatureHidden.get(child.kind) ?? 0) + 1,
+                );
             }
 
             continue;
@@ -340,10 +403,12 @@ function renderDeclaration(
 /**
  * Why signatures mode leaves a declaration out, if it does.
  *
- * `access` is reported separately from `kind`: dropping a `variable` or an `enumMember` is the documented shape of a
- * signature list, but dropping every non-public member is a visibility rule, and a caller reading the class's own
- * extension points (`getItemPrefix`, `handleAction`) has no way to tell a class with no such members from a class
- * whose members were filtered. The footer names that count.
+ * `access` is reported separately from `kind`: dropping an `enumMember` or a nested `variable` is the documented
+ * shape of a signature list, but dropping every non-public member is a visibility rule, and a caller reading the
+ * class's own extension points (`getItemPrefix`, `handleAction`) has no way to tell a class with no such members
+ * from a class whose members were filtered. The footer names that count. A **root** variable is different: it is
+ * a module-level constant, part of the file's own map, so it stays visible even though a const inside a namespace
+ * or function body does not.
  */
 type HideReason = "access" | "kind";
 
@@ -357,10 +422,6 @@ function hideReason(
         return undefined;
     }
 
-    if (isRoot && declaration.kind === "variable") {
-        return "kind";
-    }
-
     if (declaration.kind === "enumMember") {
         return "kind";
     }
@@ -371,7 +432,7 @@ function hideReason(
             : "kind";
     }
 
-    if (declaration.kind === "variable") {
+    if (declaration.kind === "variable" && !isRoot) {
         return "kind";
     }
 

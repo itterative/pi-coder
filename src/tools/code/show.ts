@@ -483,7 +483,10 @@ function renderContainer(
     const header = `# ${pathRange(source.displayPath(file.path), container.range)} · ${kindLabel(container.kind)} ${container.qualifiedName}`;
 
     if (detail === "full") {
-        return `${header}\n${sourceForDeclaration(file.source, container, true).join("\n")}`;
+        const body = sourceForDeclaration(file.source, container, true);
+        const note = body.dedented ? dedentNote(source, file, container) : "";
+
+        return `${header}\n${[note, body.lines.join("\n")].filter((part) => part.length > 0).join("\n")}`;
     }
 
     const children = showChildren(container);
@@ -568,7 +571,19 @@ function renderLeaf(
         return `${header}\n  ${declaration.signature}`;
     }
 
-    return `${header}\n${sourceForDeclaration(file.source, declaration, true).join("\n")}`;
+    const body = sourceForDeclaration(file.source, declaration, true);
+    const note = body.dedented ? dedentNote(source, file, declaration) : "";
+
+    return `${header}\n${[note, body.lines.join("\n")].filter((part) => part.length > 0).join("\n")}`;
+}
+
+/**
+ * A dedented body is a readable slice, not the file's bytes: every line lost the declaration's own indent, so a
+ * string replacement taken from it may not match the file. An edit needs the original range. The note sits before
+ * the body so a line-comment language cannot mistake it for the last line of the code.
+ */
+function dedentNote(source: CodeSource, file: ParsedFile, declaration: Declaration): string {
+    return `# dedented: read ${pathRange(source.displayPath(file.path), declaration.range)} for the exact indentation before editing`;
 }
 
 function renderAmbiguous(

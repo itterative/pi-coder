@@ -296,13 +296,18 @@ costs what `usages` costs, and imports are cached per `ParsedFile` so an edited 
 
 - `digest` degrades to a directory map when the result exceeds the character limit, and large files (`[huge]`) render
   only top-level declarations. `detail="full"` includes private/protected members, fields, enum members, and
-  variables. Declaration rows show `:start-end` when the declaration spans lines, and `:line` for a one-liner;
-  `search` locations and `show` headers use the same range convention.
+  nested variables; a **root** variable is a module constant and is part of the signature list too. Declaration rows
+  show `:start-end` when the declaration spans lines, and `:line` for a one-liner; `search` locations and `show`
+  headers use the same range convention.
 - **Signatures mode says what it hid.** A class's non-public members are dropped in `signatures` detail, and a reader
   cannot tell a class with no extension points from one whose extension points were filtered — so the footer counts
   them: `# visibility: 13 non-public member(s) hidden; detail=full lists all`. Only *access* hides are counted:
-  fields, enum members, and variables are the documented shape of a signature list, not a visibility rule. A result
-  that shows no members at all (the directory map) carries no such note, because the filter cost it nothing.
+  fields, enum members, and nested variables are the documented shape of a signature list, not a visibility rule;
+  a root variable is the file's own map and stays visible. A **single-file** digest additionally names the kinds it
+  hid (`# kinds: 2 enum members, 1 field hidden in signatures detail; detail=full lists all`) because that call is
+  asking what is in this file; if nothing visible remains, the line replaces `# no declarations` with the reason. A
+  directory digest leaves it out, since it would repeat per file. A result that shows no members at all (the
+  directory map) carries no such note, because the filter cost it nothing.
 - **The directory map names files, within its budget.** A map of directory counts answers "where is the code" but
   not "which file", which is what a caller who named one directory usually asked. Names are added per row while the
   budget allows — the root's own files first, since they sit in no subdirectory, then each directory in size order
@@ -317,7 +322,9 @@ costs what `usages` costs, and imports are cached per `ParsedFile` so an edited 
 - `show` defaults to `full` for functions/fields and `signatures` for containers; `detail` overrides that.
   Containers in signatures mode show only public members. `show` keeps signatures intact, while digest shortens
   long ones. Extracted source is dedented by the declaration's own indentation so nested members read cleanly;
-  relative indentation inside the body is preserved. A directory target pairs declarations and definitions; a
+  relative indentation inside the body is preserved, and a dedented body is preceded by
+  `# dedented: read <path>:<start-end> for the exact indentation before editing`, because a replacement copied
+  from it may not match the file. A directory target pairs declarations and definitions; a
   file target stays scoped to that file.
   When a symbol has same-signature definitions in more than one file (e.g. per-example `main` functions),
   `show` lists the locations instead of choosing one. When several overloads match, it appends a note with a

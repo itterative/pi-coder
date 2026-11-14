@@ -356,11 +356,17 @@ export function isContainer(kind: Declaration["kind"]): boolean {
 }
 
 /** Exact source for a declaration range, with an adjacent doc comment when `includeDocs` is set. */
+export interface DeclarationSource {
+    lines: string[];
+    /** True when the declaration's own indentation was removed, so the text no longer matches the file bytes. */
+    dedented: boolean;
+}
+
 export function sourceForDeclaration(
     source: string,
     declaration: Declaration,
     includeDocs: boolean,
-): string[] {
+): DeclarationSource {
     const lines: string[] = [];
     // A doc range normally precedes the declaration. A Markdown section keeps its prose *inside* its range, which
     // the section slice already prints, so printing the doc too would duplicate it.
@@ -381,7 +387,7 @@ export function sourceForDeclaration(
         ...sliceSource(source, declaration.range.startIndex, declaration.range.endIndex, indent),
     );
 
-    return lines;
+    return { lines, dedented: indent.length > 0 };
 }
 
 /**

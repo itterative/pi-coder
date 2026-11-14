@@ -15,15 +15,31 @@ describe("sourceForDeclaration", () => {
             "/project/src/a.ts",
             "typescript",
         );
-        const text = sourceForDeclaration(parsed.source, parsed.all[0]!, true).join("\n");
+        const body = sourceForDeclaration(parsed.source, parsed.all[0]!, true);
+        const text = body.lines.join("\n");
 
+        expect(body.dedented).toBe(false);
         expect(occurrences(text, "/** Kept. */")).toBe(1);
         expect(text).toContain("export function f");
     });
 
+    it("reports the dedent of a declaration that starts indented", async () => {
+        const parsed = await parseCodeFile(
+            "export class Box {\n    method(): void {\n        return;\n    }\n}\n",
+            "/project/src/b.ts",
+            "typescript",
+        );
+        const method = parsed.all.find((item) => item.qualifiedName === "Box::method");
+
+        expect(method).toBeDefined();
+        const body = sourceForDeclaration(parsed.source, method!, true);
+        expect(body.dedented).toBe(true);
+        expect(body.lines[0]).toBe("method(): void {");
+    });
+
     it("does not print a doc range that sits inside the declaration's own range", async () => {
         const parsed = await parseMarkdownFile("# Title\n\nBody line.\n", "/project/docs/a.md");
-        const text = sourceForDeclaration(parsed.source, parsed.all[0]!, true).join("\n");
+        const text = sourceForDeclaration(parsed.source, parsed.all[0]!, true).lines.join("\n");
 
         // A Markdown section's doc text is its prose, which the section range already contains.
         expect(occurrences(text, "Body line.")).toBe(1);

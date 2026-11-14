@@ -96,6 +96,114 @@ describe("outline on TypeScript", () => {
     });
 });
 
+describe("outline signature-hide notes", () => {
+    it("names the kinds a single-file digest hid, and only for a file target", async () => {
+        const shape = new MemoryCodeSource("/project", {
+            "src/shape.ts": `export class Box {
+    private value = 1;
+    method(): void {}
+}
+
+export enum Mode {
+    A,
+    B,
+}
+`,
+        });
+        const file = await runDigest(shape, { action: "digest", path: "src/shape.ts" });
+
+        expect(file.text).toContain("class Box");
+        expect(file.text).toContain("enum Mode");
+        expect(file.text).toContain(
+            "# kinds: 2 enum members, 1 field hidden in signatures detail; detail=full lists all",
+        );
+
+        // A directory digest would repeat the line per file; the general rule stays in the docs.
+        const directory = await runDigest(shape, { action: "digest", path: "src" });
+        expect(directory.text).not.toContain("# kinds:");
+
+        // Nothing is hidden in full detail, so there is nothing to announce.
+        const full = await runDigest(shape, {
+            action: "digest",
+            path: "src/shape.ts",
+            detail: "full",
+        });
+        expect(full.text).not.toContain("# kinds:");
+    });
+});
+
+describe("outline show dedent note", () => {
+    const nested = new MemoryCodeSource("/project", {
+        "src/nested.ts": `export class Box {
+    method(): void {
+        return;
+    }
+}
+
+export namespace Outer {
+    export class Inner {
+        method(): void {}
+    }
+}
+`,
+    });
+
+    it("points at the file range when a body was dedented", async () => {
+        const method = await runShow(nested, {
+            action: "show",
+            path: "src/nested.ts",
+            query: "Box::method",
+        });
+        const container = await runShow(nested, {
+            action: "show",
+            path: "src/nested.ts",
+            query: "Outer::Inner",
+            detail: "full",
+        });
+
+        expect(method.text).toContain(
+            "# dedented: read src/nested.ts:2-4 for the exact indentation before editing",
+        );
+        expect(container.text).toContain(
+            "# dedented: read src/nested.ts:8-10 for the exact indentation before editing",
+        );
+    });
+
+    it("stays quiet for a top-level declaration", async () => {
+        const box = await runShow(nested, {
+            action: "show",
+            path: "src/nested.ts",
+            query: "Box",
+            detail: "full",
+        });
+
+        expect(box.text).not.toContain("# dedented:");
+    });
+});
+
+describe("outline on TypeScript root constants", () => {
+    it("lists module-level constants but not block locals", async () => {
+        const constants = new MemoryCodeSource("/project", {
+            "src/constants.ts": `export const LIMIT = 10;
+const TABLE = { a: 1, b: 2 };
+
+export function read(): number {
+    const local = 1;
+    return LIMIT + local;
+}
+`,
+        });
+        const digest = await runDigest(constants, {
+            action: "digest",
+            path: "src/constants.ts",
+        });
+
+        expect(digest.text).toContain("const LIMIT = 10");
+        expect(digest.text).toContain("const TABLE");
+        expect(digest.text).not.toContain("const local");
+    });
+});
+
 const NESTED_FILES: Record<string, string> = {
     "src/closures.ts": `export function outer(): number {
     const local = 1;

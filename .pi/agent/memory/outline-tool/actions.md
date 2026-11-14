@@ -37,8 +37,11 @@ honest boundary is "no identifier or doc comment spells it out", not "no such co
   strongest literal row. Tiers, caps, chunks: `outline-tool/search.md`.
 - **A filtered view says what it hid.** Signatures mode drops a class's non-public members, which reads as a class
   with no extension points, so the digest footer counts them (`# visibility: N non-public member(s) hidden`).
-  Access hides only — fields, enum members, and variables are the shape of a signature list — and the directory map,
-  which shows no members, carries no note.
+  Access hides only — fields, enum members, and nested variables are the shape of a signature list — and a root
+  variable is a module constant, so the file's own map keeps it. A **single-file** digest names the kind hides too
+  (`# kinds: 2 enum members, 1 field hidden in signatures detail; detail=full lists all`) and, when nothing visible
+  remains, replaces `# no declarations` with that explanation. A directory digest omits the kind line because it
+  would repeat per file. The directory map, which shows no members, carries no note.
 - **Narrowing is a parameter.** A `path` pattern and `kind` narrow the discovered set (`deps` takes a literal file);
   `# filter:` names them and any hidden count (`outline-tool/search.md`).
 
@@ -56,6 +59,11 @@ lists same-signature definitions across files — a digest row's `:start-end` is
 selector's parameter list survives; empty entries drop and repeats stay, because `usages` counts them. A `show`
 parameter hint may be a leading subset (the output notes it was partial), and a symbol missing from the target
 file is looked up in the enclosing directory then the cwd, naming the file it actually lives in.
+
+**A dedented body says so.** An indented declaration's source is dedented by its own indentation so it reads
+cleanly, which means the printed text is not the file's bytes. Such a body carries, before the source,
+`# dedented: read <path>:<start-end> for the exact indentation before editing`; an edit or a string replacement
+needs that range. The note sits before the body so a line-comment language cannot mistake it for code.
 
 **A heading is matched as prose, a symbol is not.** Exact names would leave most headings unreachable, so a heading
 also matches by normalized prefix and substring (case, leading `#`, punctuation ignored), every candidate is
