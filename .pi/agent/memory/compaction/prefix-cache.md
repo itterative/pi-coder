@@ -14,7 +14,8 @@ unexpected `obs=0`, or a `cache-read-zero` suspect.**
 
 - The rebuild is a genuine shorter prefix of what the provider cached, verified byte-for-byte against the provider's
   own requests (`verified=649/649` on one hosted route, `362/362` and `19/19` elsewhere). When reuse still reads
-  zero, the cause is server-side, not ours.
+  zero, the cause is server-side, not ours — **except when the shape gate rejects the prompt first**; that reads as
+  `obs=0`, not as a verified prefix with `cached=0`. See "The prompt was the whole cache bug" below.
 - A 12,817-char system prompt is pi's **base** prompt and means the compaction ran outside an active agent run; it
   costs the cache nothing and is not a rebuild bug. Do not reconstruct the prompt.
 - Memory edits do not break the cache mid-session — the index is frozen per session. Measured false, 2026-09-05.
@@ -212,11 +213,71 @@ retained shape without translation. `hashes the whole system prompt, not the pri
 **Records written before that change cannot support any conclusion of the form "the system prompt did not change".**
 The ladder heads that `verified=N/M` rests on are sha256 over messages and never had this weakness.
 
-**One live exception still unexplained:** a run at 14:20:29 on session `01a070e0` reported `sys=12817c` with
-`parent-sys=12817c` and a chain holding 374 rows, minutes after the 11:31 run reported 24813. "Short prompt means a
-process that has sent no request yet" fits a cold process, not a live 236k session whose recent requests also carry
-the short prompt. Check whether a manual `/compact` resolves the prompt outside an active agent run before treating
-either reading as settled.
+**One live exception, explained 2026-11-14:** a run at 14:20:29 on session `01a070e0` reported `sys=12817c` with
+`parent-sys=12817c` and a chain holding 374 rows, minutes after the 11:31 run reported 24813. The accessor bug above
+is the mechanism: a manual `/compact` runs between turns, so `ctx.getSystemPrompt()` reads the base prompt. The
+matching `parent-sys` is the part that is inference rather than measurement — a stage-1 request is itself a provider
+request, so its base prompt can be the newest row on the branch — and it is worth no more than that.
+
+### The prompt was the whole cache bug (2026-11-14)
+
+A trace holding **68 live compactions** (2026-10-21 → 11-14, all `reason=manual`) had `observations=0` in every
+single one: the rejection count equalled the on-branch count, by system hash in all 68 and by tool hash in most. `cached=` was 0–3k on
+100–470k-token requests (0.5–2% reuse), with three outliers. The instrument was right and the request was wrong.
+
+Stage 1 was building the system prompt from `ctx.getSystemPrompt()` and the tools from `pi.getActiveTools()`.
+pi clears `_runSystemPromptOptions` in the `_runAgentPrompt` finally (`agent-session.js:1409`), and that accessor
+is `buildSystemPrompt(_runSystemPromptOptions ?? _baseSystemPromptOptions)` (`:1057`), so a manual compaction —
+which runs between turns — reads the **base** prompt: 11.3–17.7k against a parent request carrying 25.9–31.5k
+(base + the sections `before_agent_start` installs). Inside a run it can instead read a *newer* prompt than the
+last request (32–40k). Both directions are in the trace, and both reject every reference.
+
+Replaying the transcript is **not** a substitute: `getCurrentSystemPrompt()` over the pre-fold projection matched
+the parent's `payload.system` in only 12/68 runs. The transcript can lag the live prompt (older builds never
+recorded the section delta), and after a fold its head is the compaction entry's `systemMessage`, which is the
+*merged* state at fold time — not the leading message the last request sent. `fold.systemMessage` matched in the
+same 12. These are three different quantities: the report prints the first two as `ours=` and `parent-sys=`, and
+the third is the compaction entry's `systemMessage`.
+
+The fix is to resend what the parent's request actually carried: `rememberParentRequest`
+(`src/modules/compaction/index.ts`) keeps `providerSystemPrompt(payload)` from the `before_provider_request`
+payload, keyed by session manager and validated by leaf id. The hook is now registered unconditionally (it used to
+be gated on chain tracing), because this is cache behavior, not diagnostics. Stage 1 strips a leading system
+message from the span — pi 1.1 replays the prompt there and `appendSpanEntry` recomputes it when copying a
+compaction row — and falls back to that stripped text, then `ctx.getSystemPrompt()`. Nothing is persisted: the
+prompt is one string per live session, and a reload costs a fallback, never a wrong compaction.
+
+**Confirmed live on the next manual run (2026-11-14 09:56):** both sides printed `sys=28920c` with the same
+`0e5f25a6ddd409fd` hash, `rej=0sys/211tools` — the prompt half was exact, and every on-branch reference was then
+rejected on the tool block. `obs` stayed 0 and reuse 2%.
+
+**The tool block was the second half (same day).** `activeToolDefinitions(pi)` rebuilds declarations from
+`pi.getAllTools()`, which returns name, description, and parameters only. The built-in tools carry
+`constrainedSampling: {type: "json_schema", strict: "prefer"}`; pi-ai's `convertTools` reads it and, when the
+provider supports strict mode, serializes `makeStrictJsonSchema(parameters)` (every property required,
+`additionalProperties: false`) with `strict: true`, where a declaration without the flag yields the raw schema and
+`strict: false`. Same loadout, different block: `69fb0117…` against the parent's `bbcddede…`, the latter constant
+across all 223 requests of that session. Rebuilding those declarations with the flag reproduces `bbcddede…`
+exactly, and stripping it reproduces `69fb0117…`; only read/bash/edit/write carry it, which is why the four
+pi-coder tools never moved. The provider body cannot solve this because the rewrite has already
+happened. The declarations are captured from `context_with_system` instead — pi hands over the transcript with
+`toolsAdded` still attached, before the adapter runs — held as pending until the matching body arrives (same
+leaf), then paired with it. The span's replayed `toolsAdded` is the fallback for a process that has sent nothing
+yet, and `activeToolDefinitions` is the last resort.
+
+**Confirmed live 2026-11-14 10:08** — the first manual run after both fixes, same session:
+
+```
+prefix      reference=chain  usable=true  verified=183/183  obs=288  first=verified  divergences=[]
+            rej=0sys/0tools  sys=28920c both  hash=0e5f25a6ddd409fd both
+native      accepted  in=1291  cached=119808  out=2045  est=121172  copied=353  13.9s
+serialized  accepted  in=16424  cached=0  out=4350  ser=48091c  dropped=28  24.6s
+```
+
+88% of the compaction's 137k tokens came from cache, and stage 1 alone was 99% cached: the fresh 1,291 is the
+appended instruction plus rounding, which is the intended shape. `otherDisagreements: 83` is not a regression — the
+older references in that chain are deeper (up to 469) than this span, so they diverge past the cut, which is what
+the one-reference rule is for. The estimate landed within `ledgerSkew 0.0006` of the provider's own count.
 
 ### Measured reuse, by route
 

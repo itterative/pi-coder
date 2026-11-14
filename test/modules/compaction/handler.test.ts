@@ -147,6 +147,125 @@ describe("compaction stages", () => {
         expect(h.trailingInstruction(0)).toContain("## Key Decisions");
     });
 
+    it("stage 1 resends the prompt and declarations of the parent's last request", async () => {
+        const h = build({ responses: [segmentSummary, reducedSummary] });
+        const declarations = [
+            {
+                name: "bash",
+                description: "run a command",
+                parameters: { type: "object", properties: { command: { type: "string" } } },
+                constrainedSampling: { type: "json_schema", strict: "prefer" },
+            },
+        ];
+        // pi hands the transcript over before the body exists, which is the only point where the sampling
+        // constraint is still attached. The serialized body has already applied it to the schema and dropped it.
+        h.observeContext([
+            {
+                role: "system",
+                content: "the parent's live prompt",
+                toolsAdded: declarations,
+                timestamp: 0,
+            },
+            { role: "user", content: "go", timestamp: 0 },
+        ]);
+        h.observeProviderRequest({
+            messages: [
+                { role: "system", content: "the parent's live prompt" },
+                { role: "user", content: "go" },
+            ],
+            tools: [{ type: "function", function: { name: "bash" } }],
+        });
+        // The loadout moved on after that request. The cache belongs to the request that went out, so its
+        // declarations are what stage 1 has to resend - not whatever `ctx.getSystemPrompt()` says now.
+        h.piStub.toolSurface.active = ["agent"];
+
+        await h.compact();
+
+        expect(h.calls[0].context.systemPrompt).toBe("the parent's live prompt");
+        expect(h.calls[0].context.tools).toEqual(declarations);
+    });
+
+    it("falls back to the live loadout when no declaration capture survives", async () => {
+        const h = build({ responses: [segmentSummary, reducedSummary] });
+        h.observeProviderRequest({
+            messages: [{ role: "system", content: "the parent's live prompt" }],
+        });
+
+        await h.compact();
+
+        // A host without `context_with_system` costs the cache, not the compaction: the current declarations are
+        // the best remaining guess.
+        expect(h.calls[0].context.tools?.map((tool) => tool.name)).toEqual(["bash", "read"]);
+    });
+
+    it("falls back to the span's replayed prompt and never sends it twice", async () => {
+        const branch = messageChain([
+            {
+                id: "sys-1",
+                message: {
+                    role: "system",
+                    content: "",
+                    sections: { preamble: "the span's prompt" },
+                    toolsAdded: [
+                        {
+                            name: "span_tool",
+                            description: "declared in the transcript",
+                            parameters: { type: "object", properties: {} },
+                        },
+                    ],
+                    timestamp: 0,
+                },
+            },
+            ...sampleSpan(READ_BODY).map((message, index) => ({
+                id: `span-${String(index)}`,
+                message,
+            })),
+            ...sampleKept().map((message, index) => ({
+                id: index === 0 ? "kept-1" : `kept-${String(index + 1)}`,
+                message,
+            })),
+        ]);
+        const h = build({ responses: [segmentSummary, reducedSummary], branch });
+
+        await h.compact();
+
+        expect(h.calls[0].context.systemPrompt).toBe("the span's prompt");
+        // The declarations are replayed from the same message, so a fresh process can still match the parent.
+        expect(h.calls[0].context.tools?.map((tool) => tool.name)).toEqual(["span_tool"]);
+        // The prompt belongs in the request's system field; a copy in the ladder would shift every message.
+        expect(h.calls[0].context.messages.some((message) => message.role === "system")).toBe(
+            false,
+        );
+    });
+
+    it("does not mistake a section delta for the prompt", async () => {
+        const branch = messageChain([
+            {
+                id: "sys-1",
+                message: {
+                    role: "system",
+                    content: "",
+                    sections: { memory_system: "<memory_system>a delta</memory_system>" },
+                    timestamp: 0,
+                },
+            },
+            ...sampleSpan(READ_BODY).map((message, index) => ({
+                id: `span-${String(index)}`,
+                message,
+            })),
+            ...sampleKept().map((message, index) => ({
+                id: index === 0 ? "kept-1" : `kept-${String(index + 1)}`,
+                message,
+            })),
+        ]);
+        const h = build({ responses: [segmentSummary, reducedSummary], branch });
+
+        await h.compact();
+
+        // The delta alone is not a prompt; the accessor is the better remaining fallback.
+        expect(h.calls[0].context.systemPrompt).toBe(SYSTEM_PROMPT);
+    });
+
     it("both stages send the session thinking level", async () => {
         // The cache entry stage 1 is trying to hit was made by a pi turn request that carried these parameters,
         // and on the compatible branches pi-ai renders `enable_thinking` from this option's truthiness - so a
@@ -902,9 +1021,13 @@ describe("compaction stages", () => {
         expect(notes.join("\n")).toContain("compaction stopped: auth");
     });
 
-    it("installs only the compaction hook plus the payload capture it diffs against", () => {
+    it("installs only the compaction hook plus the two request captures it diffs against", () => {
         const h = build();
-        expect(h.piStub.order).toEqual(["on:before_provider_request", "on:session_before_compact"]);
+        expect(h.piStub.order).toEqual([
+            "on:context_with_system",
+            "on:before_provider_request",
+            "on:session_before_compact",
+        ]);
         expect(h.piStub.handlersFor("session_before_compact")).toHaveLength(1);
     });
 

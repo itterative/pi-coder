@@ -21,12 +21,17 @@ fresh `sessionId`, so all of that bulk is billed as fresh input.
 `span-session.ts` copies pi's resolved context entries (`ctx.sessionManager.buildContextEntries()`) truncated at
 `preparation.firstKeptEntryId` into `SessionManager.inMemory(cwd)`, and
 `convertToLlm(spanManager.buildSessionContext().messages)` yields the discarded span as **real message objects** —
-previous checkpoint included, retained tail excluded. Built with the parent's `ctx.getSystemPrompt()` and its
-active tools in `agent.state.tools` order, so the request is a strict shorter prefix of what the provider already
-cached. Tools stay in the request — removing them would move the prefix — and the prohibition on calling them is
-the instruction text, because `tool_choice` is not sent (below). There is **no tool-call pruning in
-`native-request.ts`**: it never looks at `toolCall` parts, and any future pruning must be measured against the
-reuse numbers in `prefix-cache.md`.
+previous checkpoint included, retained tail excluded. The request's system prompt is the one the parent's **last
+request body** carried; its tool declarations are the `toolsAdded` pi handed to `context_with_system` just before
+that body was serialized. Both are retained in memory (`parentPrompts` / `pendingTools` in `index.ts`);
+`ctx.getSystemPrompt()`, `pi.getActiveTools()` and the span's own replay are only fallbacks, because none of them
+is the parent's request. The split is load-bearing: the body has already applied `constrainedSampling` to each
+tool schema and dropped the flag, so only the transcript capture can reproduce the tool block. A leading system
+message the span itself replays is stripped and used as the next fallback, never sent twice. See `prefix-cache.md`
+for why this is the whole cache question. Tools stay in the request — removing them would move the prefix — and the
+prohibition on calling them is the instruction text, because `tool_choice` is not sent (below). There is **no
+tool-call pruning in `native-request.ts`**: it never looks at `toolCall` parts, and any future pruning must be
+measured against the reuse numbers in `prefix-cache.md`.
 
 Both stages forward the session's thinking level as `reasoningEffort` (below). A
 `toolCall` block in the response rejects the stage; a call the server leaves unparsed arrives as text and is

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
     fingerprintPayload,
     fingerprintSummary,
+    providerSystemPrompt,
     requestMessages,
     requestShape,
 } from "../../../src/modules/compaction/prefix-diff";
@@ -44,6 +45,41 @@ function openaiBody(input: { system?: string; tools?: unknown[]; messages?: unkn
         tools: input.tools ?? [{ type: "function", function: { name: "read" } }],
     };
 }
+
+describe("the prompt stage 1 must resend", () => {
+    it("reads the top-level system string of an Anthropic-style body", () => {
+        expect(providerSystemPrompt(anthropicBody({ system: "be terse" }))).toBe("be terse");
+    });
+
+    it("reads the leading system message of an OpenAI-style body", () => {
+        expect(providerSystemPrompt(openaiBody({ system: "be terse" }))).toBe("be terse");
+    });
+
+    it("reads a prompt carried as one text block", () => {
+        // Anthropic bodies put the prompt in a block array; one text block is the same prompt a string is.
+        expect(
+            providerSystemPrompt({ system: [{ type: "text", text: "be terse" }], messages: [] }),
+        ).toBe("be terse");
+    });
+
+    it("declines a body whose prompt is not plain text", () => {
+        // A JSON-stringified block array would be a different prompt, so the caller falls back rather than
+        // sending something the provider never saw. Two blocks is the OAuth identity plus the prompt, which
+        // this field cannot reproduce.
+        expect(
+            providerSystemPrompt({
+                system: [
+                    { type: "text", text: "an identity block" },
+                    { type: "text", text: "be terse" },
+                ],
+                messages: [],
+            }),
+        ).toBeUndefined();
+        expect(
+            providerSystemPrompt({ messages: [{ role: "user", content: "hi" }] }),
+        ).toBeUndefined();
+    });
+});
 
 describe("request shape fingerprinting", () => {
     it("reads the system prompt from an Anthropic-style body", () => {

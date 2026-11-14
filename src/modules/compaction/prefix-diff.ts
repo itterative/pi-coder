@@ -231,6 +231,51 @@ export function requestMessages(payload: unknown): unknown[] {
     return Array.isArray(record.messages) ? record.messages : [];
 }
 
+/**
+ * The leading system prompt exactly as the provider body carried it, or undefined when it is not plain text.
+ *
+ * This is the prompt stage 1 must rebuild its request with. `ctx.getSystemPrompt()` is not it: pi builds that from
+ * the current run's prompt options, and a run clears them when it ends (`agent-session.js`
+ * `_runSystemPromptOptions = undefined`), so a manual compaction reads the base prompt while the parent's last
+ * request carried every section `before_agent_start` installed. All 68 live compactions in one trace were
+ * rejected on this hash for that reason, and their cache reuse was 0.5-2%.
+ *
+ * Text only, deliberately: an array is provider blocks, and only a lone text block is the same prompt a string
+ * would be. `safeStringify` would send the array's JSON as the prompt; the caller falls back instead of inventing
+ * one.
+ */
+export function providerSystemPrompt(payload: unknown): string | undefined {
+    const record = asRecord(payload);
+    const direct = systemTextValue(record.system);
+    if (direct !== undefined) {
+        return direct;
+    }
+
+    const leading = messagesOf(record)[0];
+    if (leading === undefined) {
+        return undefined;
+    }
+
+    const message = asRecord(leading);
+    return message.role === "system" ? systemTextValue(message.content) : undefined;
+}
+
+/** A prompt carried as a string, or as one text block (Anthropic and some OpenAI bodies do the latter). */
+function systemTextValue(value: unknown): string | undefined {
+    if (typeof value === "string") {
+        return value.length > 0 ? value : undefined;
+    }
+
+    if (!Array.isArray(value) || value.length !== 1) {
+        return undefined;
+    }
+
+    const block = asRecord(value[0]);
+    return block.type === "text" && typeof block.text === "string" && block.text.length > 0
+        ? block.text
+        : undefined;
+}
+
 /** A compact, loggable summary of a fingerprint: never the payload itself. */
 export function fingerprintSummary(fingerprint: PayloadFingerprint): Record<string, unknown> {
     return {

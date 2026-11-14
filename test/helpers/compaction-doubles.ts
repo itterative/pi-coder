@@ -508,6 +508,10 @@ export interface CompactionHarness {
     sentText(callIndex: number): string;
     /** Text of the single user message a serialized request consists of. */
     requestText(callIndex: number): string;
+    /** Fire pi's `context_with_system` hook, which is where the module captures declarations before serialization. */
+    observeContext(messages: unknown[]): void;
+    /** Fire pi's `before_provider_request` hook, which is how the module learns the parent's prompt and tools. */
+    observeProviderRequest(payload: unknown): void;
 }
 
 export interface CompactionHarnessInput {
@@ -646,6 +650,20 @@ export function createCompactionHarness(input: CompactionHarnessInput): Compacti
         return call;
     }
 
+    function observeContext(messages: unknown[]): void {
+        piStub.requireHandler("context_with_system")(
+            { type: "context_with_system", messages },
+            ctx,
+        );
+    }
+
+    function observeProviderRequest(payload: unknown): void {
+        piStub.requireHandler("before_provider_request")(
+            { type: "before_provider_request", payload },
+            ctx,
+        );
+    }
+
     return {
         calls,
         piStub,
@@ -682,6 +700,8 @@ export function createCompactionHarness(input: CompactionHarnessInput): Compacti
             }
             return textOfContent(first.content);
         },
+        observeContext,
+        observeProviderRequest,
     };
 }
 

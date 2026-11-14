@@ -20,8 +20,9 @@ import {
  * re-typed copy of it. That only pays off when the request is prefix-identical to what already went out:
  * same system prompt string, same tool array in the same order, same message objects. Hence reading the
  * active tool *names* and mapping them back onto definitions rather than taking every configured tool, and
- * hence `ctx.getSystemPrompt()`, which reflects the override `before_agent_start` handlers installed —
- * pi-coder's own memory and scratchpad blocks included.
+ * hence stage 1 preferring the prompt and declarations retained from the parent's last request body over
+ * `ctx.getSystemPrompt()` and the current loadout - both of which describe the state now, not the request
+ * whose cache this is trying to hit.
  */
 
 /** Tools in `agent.state.tools` order, which is the order pi serialized them in. */

@@ -1,6 +1,15 @@
-import type { Api, Context, Message, Model, Usage } from "@earendil-works/pi-ai";
+import {
+    getSystemMessageText,
+    type Api,
+    type Context,
+    type Message,
+    type Model,
+    type Tool,
+    type Usage,
+} from "@earendil-works/pi-ai";
 import type {
     CompactionResult,
+    ContextWithSystemEvent,
     ExtensionAPI,
     ExtensionContext,
     SessionBeforeCompactEvent,
@@ -29,6 +38,7 @@ import {
 import {
     fingerprintPayload,
     fingerprintSummary,
+    providerSystemPrompt,
     requestMessages,
     requestShape,
 } from "./prefix-diff";
@@ -350,6 +360,116 @@ function chainTargetFor(cwd: string): ChainTraceTarget {
  * against its own history and the entry is released with the session.
  */
 const requestChains = new WeakMap<SessionShapeView, RequestChain>();
+
+/** A message of the transcript a `context_with_system` handler receives. */
+type PromptMessage = ContextWithSystemEvent["messages"][number];
+
+/** The last request pi sent in this session, as the prompt and tool declarations stage 1 has to resend. */
+interface ParentRequestPrompt {
+    /** The leading system text exactly as the provider body carried it. */
+    system: string;
+    /** The declarations as pi held them, so a later loadout change cannot move the prefix. */
+    tools: Tool[];
+    /** The branch leaf the request was sent from, so a branch navigated away from cannot supply it. */
+    leafId: string | null;
+}
+
+/**
+ * Per session: what the parent's last request actually carried.
+ *
+ * In memory only, and for one reason the chain cannot serve: stage 1 has to resend the parent's prompt and tools
+ * byte for byte, and the only record of them is the body pi handed to the provider. The accessor
+ * `ctx.getSystemPrompt()` answers from the current run's options instead, which a run clears on exit, and the
+ * transcript does not always replay the sections either - measured over 68 live runs, the transcript's prompt
+ * matched the parent's in 12 and `ctx.getSystemPrompt()` in fewer. A failed lookup costs a cache miss, never a
+ * compaction: every caller falls back.
+ *
+ * The prompt comes from the provider body because only it has the rendered text; the declarations come from
+ * `context_with_system` because the body has already serialized them. `constrainedSampling` is the field that
+ * makes that difference visible: the adapter applies it to the schema (strict rewriting) and drops the flag, so
+ * rebuilding from `pi.getAllTools()` loses both and produces a different tool block for the same loadout.
+ */
+const parentPrompts = new WeakMap<SessionShapeView, ParentRequestPrompt>();
+
+/** The declarations captured for the request currently being sent, before its body exists. */
+const pendingTools = new WeakMap<SessionShapeView, { tools: Tool[]; leafId: string | null }>();
+
+/** The current tool set of a transcript, as pi would replay it: additions and removals in order. */
+function toolDeclarations(messages: readonly PromptMessage[]): Tool[] | undefined {
+    const tools = new Map<string, Tool>();
+    for (const message of messages) {
+        if (message.role !== "system") {
+            continue;
+        }
+
+        for (const removed of message.toolsRemoved ?? []) {
+            tools.delete(removed.name);
+        }
+
+        for (const added of message.toolsAdded ?? []) {
+            tools.set(added.name, added);
+        }
+    }
+
+    return tools.size > 0 ? [...tools.values()] : undefined;
+}
+
+/** Keep the declarations the next provider body is about to serialize, before `constrainedSampling` is applied. */
+function rememberParentTools(
+    sessionManager: SessionShapeView,
+    messages: readonly PromptMessage[],
+): void {
+    const tools = toolDeclarations(messages);
+    if (tools === undefined) {
+        return;
+    }
+
+    // Held as pending rather than committed: if the request never reaches the provider, a later body must not be
+    // paired with declarations from this one.
+    pendingTools.set(sessionManager, { tools, leafId: sessionManager.getLeafId() });
+}
+
+/** Remember the prompt and declarations of the request pi just sent. */
+function rememberParentRequest(
+    pi: ExtensionAPI,
+    sessionManager: SessionShapeView,
+    payload: unknown,
+): void {
+    const leafId = sessionManager.getLeafId();
+    const pending = pendingTools.get(sessionManager);
+    pendingTools.delete(sessionManager);
+
+    const system = providerSystemPrompt(payload);
+    if (system === undefined) {
+        // The newest request is the one the cache belongs to; an older prompt cannot match it, and keeping it
+        // would make a miss look like a stale-body problem instead of an unreadable body.
+        parentPrompts.delete(sessionManager);
+        return;
+    }
+
+    const tools =
+        pending !== undefined && pending.leafId === leafId
+            ? pending.tools
+            : activeToolDefinitions(pi);
+    parentPrompts.set(sessionManager, { system, tools, leafId });
+}
+
+/** The retained parent request, when its leaf is still on this branch. */
+function parentPromptFor(
+    sessionManager: SessionShapeView,
+    branch: readonly SessionEntry[],
+): ParentRequestPrompt | undefined {
+    const prompt = parentPrompts.get(sessionManager);
+    if (prompt === undefined) {
+        return undefined;
+    }
+
+    if (prompt.leafId !== null && !pathIdSet(branch).has(prompt.leafId)) {
+        return undefined;
+    }
+
+    return prompt;
+}
 
 /**
  * The chain for a session, folded in from disk exactly once per session manager.
@@ -733,9 +853,24 @@ function attemptFields(
     };
 }
 
+/** Whether a system message is a whole prompt rather than the section delta pi appends mid-session. */
+function isWholePrompt(message: Message): boolean {
+    if (message.role !== "system") {
+        return false;
+    }
+
+    const sections = message.sections;
+    // A full prompt always carries its preamble (pi's own, or a forced one); a delta carries only what changed.
+    return sections === undefined || typeof sections["preamble"] === "string";
+}
+
 /** Entries the span covers, resolved by pi rather than by slicing converted messages by hand. */
 function spanMessages(input: StageContext): {
     messages: Message[];
+    /** The span's own leading system prompt, when it carried one; the fallback for stage 1's system field. */
+    prompt?: string;
+    /** The declarations the span replays, with `constrainedSampling` intact; the fallback when none were retained. */
+    tools?: Tool[];
     entries: SessionEntry[];
     /**
      * The branch in pi's own file order, which is what the head ledger walks: the window above is a slice of it,
@@ -761,10 +896,25 @@ function spanMessages(input: StageContext): {
     // nothing about that.
     const span = stageOneSpanEntries(branch, cut.firstKeptEntryId);
     const built = buildSpanSession(span.entries, ctx.cwd);
-    const messages = convertToLlm(built.sessionManager.buildSessionContext().messages);
+    const context = built.sessionManager.buildSessionContext().messages;
+    const converted = convertToLlm(context);
+    // pi 1.1 replays the prompt as the span's leading system message, and the request already carries it as its
+    // system field; leaving the copy in the ladder would send the prompt twice and shift every message after it.
+    // Its text is still the best fallback when no request body has been retained - a first fold's copy is the
+    // transcript's own initial prompt.
+    const leading = converted[0]?.role === "system" ? converted[0] : undefined;
+    const messages = leading === undefined ? converted : converted.slice(1);
+    // Read before the slice: the leading message is usually where pi recorded the declarations, and a body that
+    // was rebuilt from `pi.getAllTools()` would drop the sampling constraint the provider's schema rewrite reads.
+    const tools = toolDeclarations(converted);
 
     return {
         messages,
+        prompt:
+            leading !== undefined && isWholePrompt(leading)
+                ? getSystemMessageText(leading)
+                : undefined,
+        tools,
         entries: span.entries,
         branch,
         keptEntry: entries.find((entry) => entry.id === cut.firstKeptEntryId),
@@ -797,10 +947,11 @@ function spanMessages(input: StageContext): {
 async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<StageResult> {
     const { pi, ctx, preparation, signal, trace, cut } = input;
     const span = spanMessages(input);
-    const tools = activeToolDefinitions(pi);
+    const parent = parentPromptFor(ctx.sessionManager, span.branch);
+    const tools = parent?.tools ?? span.tools ?? activeToolDefinitions(pi);
     const instruction = input.instruction;
     const context = buildNativeContext({
-        systemPrompt: ctx.getSystemPrompt(),
+        systemPrompt: parent?.system ?? span.prompt ?? ctx.getSystemPrompt(),
         tools,
         messages: span.messages,
         instruction,
@@ -844,8 +995,8 @@ async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<
                   // The same two numbers the request is charged with, measured against the prompt and tools
                   // actually on this wire rather than a caller's recomputation of them.
                   fixedPrefixTokens:
-                      estimateTextTokens(ctx.getSystemPrompt()) +
-                      estimateTextTokens(JSON.stringify(tools) ?? ""),
+                      estimateTextTokens(context.systemPrompt ?? "") +
+                      estimateTextTokens(JSON.stringify(context.tools) ?? ""),
               }
             : {};
     // This stage's own request, not the walk's proposal: when the session carries a count of this body, an
@@ -1379,18 +1530,25 @@ function outcomeFor(route: CompactionRoute): CompactionTraceOutcome {
 
 /** Registered for the parent session and for every delegated child. */
 export function registerCompactionExtension(pi: ExtensionAPI): void {
-    // Registered when either consumer wants observations. The launch cwd stands in for per-project config
-    // here because registration happens once per load: a child in another worktree whose own config enables
-    // chain persistence while bodies are off would go unobserved. `recordChainRequest` still self-gates per
-    // cwd, so the reachable mistake is a missing observation, never a wrong one.
-    if (isAgentTraceEnabled() || chainTargetFor(process.cwd()).enabled) {
-        // Record the hash ladder of the body pi built, so a later stage-1 request can tell a rebuilt-prefix
-        // mismatch from a provider that simply will not serve the cache. The ladder is also persisted, which is
-        // why this stays registered when body tracing is off.
-        pi.on("before_provider_request", (event, ctx) => {
+    // Registered unconditionally, because stage 1 needs the parent's own prompt and tool declarations to reuse
+    // the provider's cached prefix; the chain observation below is the part that is gated. The launch cwd stands
+    // in for per-project config here because registration happens once per load: a child in another worktree
+    // whose own config enables chain persistence while bodies are off would go unobserved. `recordChainRequest`
+    // still self-gates per cwd, so the reachable mistake is a missing observation, never a wrong one.
+    const observingChain = isAgentTraceEnabled() || chainTargetFor(process.cwd()).enabled;
+    pi.on("context_with_system", (event, ctx) => {
+        rememberParentTools(ctx.sessionManager, event.messages);
+    });
+
+    // Record the hash ladder of the body pi built, so a later stage-1 request can tell a rebuilt-prefix
+    // mismatch from a provider that simply will not serve the cache. The ladder is also persisted, which is
+    // why this stays registered when body tracing is off.
+    pi.on("before_provider_request", (event, ctx) => {
+        rememberParentRequest(pi, ctx.sessionManager, event.payload);
+        if (observingChain) {
             observeParentRequest(ctx.sessionManager, ctx.cwd, event.payload);
-        });
-    }
+        }
+    });
 
     pi.on("session_before_compact", async (event, ctx) => {
         try {
