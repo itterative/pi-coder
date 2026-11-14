@@ -403,7 +403,7 @@ export function declarationLine(
     const includeDefTag = options.includeDefTag ?? true;
     const signature = rowSignature(declaration, options.signatureLimit);
     const tag =
-        includeDefTag && declaration.isDefinition && isFunctionLike(declaration.kind)
+        includeDefTag && declaration.isDefinition && isDefinitionTagged(declaration.kind)
             ? " [def]"
             : "";
     const line = includeLine ? `  :${lineRange(declaration.range)}` : "";
@@ -479,6 +479,11 @@ export function isFunctionLike(kind: Declaration["kind"]): boolean {
         kind === "destructor" ||
         kind === "operator"
     );
+}
+
+/** Kinds that carry the `[def]`/`[decl]` tag: functions and methods, and a macro a caller can `show`. */
+export function isDefinitionTagged(kind: Declaration["kind"]): boolean {
+    return isFunctionLike(kind) || kind === "macro";
 }
 
 export function isContainer(kind: Declaration["kind"]): boolean {

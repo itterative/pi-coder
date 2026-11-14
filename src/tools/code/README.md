@@ -92,7 +92,8 @@ buffer from the declaration parser. Every other language uses the identity prepr
 - C++ attributes (`[[nodiscard]]`, …) and GCC `__attribute__((...))` are blanked, and `= {}` defaults become
   `= 0`; the original text is restored in signatures and source slices;
 - preprocessor directive lines are copied verbatim, so `#define VIBES_AVX2` and `#ifndef VIBES_KERNEL_HASH`
-  are not mistaken for declaration macros.
+  are not mistaken for declaration macros. `#define` lines are also **declarations**: `kind: "macro"`, signature
+  the first line (continuation backslash stripped), body the replacement value, range over every continuation line.
 
 Two invariants make this safe:
 
@@ -117,6 +118,10 @@ output.
   those bodies (`dequant::decode::decode_row`). Anonymous inline callbacks stay part of the enclosing source
   because they have no stable name to select.
 - Parse errors are counted and reported, never fatal.
+- A `#define` is a `macro` declaration at file scope even when the directive sits inside a class or function body,
+  because the preprocessor is textual and has no owner. Every preprocessor branch is indexed (the tool is not a
+  preprocessor), and the value is the declaration's body, so literal body search reaches a log or error string
+  inside a macro.
 
 ### JavaScript and TypeScript behavior worth knowing
 
@@ -156,7 +161,8 @@ output.
 
 - Go package and Rust module scopes prefix qualified names. Go `type` specs become structs, interfaces, or type
   aliases; receiver methods use `Type::method`. Rust structs, enums, traits, modules, constants, and type
-  aliases are containers/declarations; `impl` methods attach to the implemented type.
+  aliases are containers/declarations; `impl` methods attach to the implemented type. Rust `macro_rules!` is a
+  `macro` declaration, its first rule the body.
 - Visibility maps to the shared access model where the language has a keyword (`pub`, Java/C#/PHP modifiers).
   Go exports are inferred from capitalization; unexported members stay private.
 - `usages` call shapes: Go `call_expression`; Rust `call_expression` and `macro_invocation`.

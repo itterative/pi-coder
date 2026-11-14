@@ -86,9 +86,56 @@ class RustVisitor extends DeclarationVisitor {
                 this.visitAlias(node, context);
 
                 return;
+            case "macro_definition":
+                this.visitMacro(node, context);
+
+                return;
             default:
                 return;
         }
+    }
+
+    /** `macro_rules! name { … }`: Rust's macro form that declares something, with its first rule as the body. */
+    private visitMacro(node: SyntaxNode, context: ScopeContext): void {
+        const nameNode = node.childForFieldName("name") ?? findFirst(node, "identifier");
+
+        if (nameNode === null) {
+            return;
+        }
+
+        const rule = findFirst(node, "macro_rule");
+
+        this.addDeclaration(
+            {
+                kind: "macro",
+                name: cleanName(this.textOf(nameNode)),
+                scope: context.scope,
+                startIndex: node.startIndex,
+                endIndex: node.endIndex,
+                signatureEnd: this.macroSignatureEnd(node, rule),
+                body: rule,
+                nameNode,
+                docAnchor: node,
+                access: visibilityOf(node, this.source),
+                isDefinition: true,
+            },
+            context.parent,
+        );
+    }
+
+    /** `macro_rules! name` without the opening brace, which belongs to the body. */
+    private macroSignatureEnd(node: SyntaxNode, rule: SyntaxNode | null): number {
+        if (rule === null) {
+            return node.endIndex;
+        }
+
+        let end = rule.startIndex;
+
+        while (end > node.startIndex && /[\s{]/.test(this.source[end - 1] ?? "")) {
+            end -= 1;
+        }
+
+        return end;
     }
 
     private visitModule(node: SyntaxNode, context: ScopeContext): void {

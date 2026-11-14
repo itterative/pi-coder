@@ -8,7 +8,7 @@ import {
     declarationLine,
     discoveryCapNote,
     filterNote,
-    isFunctionLike,
+    isDefinitionTagged,
     nextOffsetNote,
     renderWithinBudget,
     scopeLabel,
@@ -271,7 +271,7 @@ async function renderFile(
         if (huge) {
             lines.push(
                 declarationLine(declaration, 0, {
-                    includeDefTag: isFunctionLike(declaration.kind),
+                    includeDefTag: isDefinitionTagged(declaration.kind),
                 }),
             );
 
@@ -408,7 +408,7 @@ function renderKind(
     );
     const lines = matched.map((declaration) => {
         const row = declarationLine(declaration, 0, {
-            includeDefTag: isFunctionLike(declaration.kind),
+            includeDefTag: isDefinitionTagged(declaration.kind),
         });
         const separator = declaration.qualifiedName.lastIndexOf("::");
         const owner = separator === -1 ? "" : declaration.qualifiedName.slice(0, separator);
@@ -456,7 +456,7 @@ function renderDeclaration(
     const lines = [
         declarationLine(declaration, depth, {
             includeLine: true,
-            includeDefTag: isFunctionLike(declaration.kind),
+            includeDefTag: isDefinitionTagged(declaration.kind),
         }),
     ];
 

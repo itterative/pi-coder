@@ -173,6 +173,11 @@ class CppVisitor {
                 this.visitAlias(node, context);
 
                 return;
+            case "preproc_def":
+            case "preproc_function_def":
+                this.visitMacro(node);
+
+                return;
             default:
                 if (context.local === true && LOCAL_BLOCK_NODES.has(node.type)) {
                     this.visitChildren(node, context);
@@ -423,6 +428,65 @@ class CppVisitor {
                 local: true,
             });
         }
+    }
+
+    /**
+     * A `#define`, as a declaration.
+     *
+     * The preprocessor is textual, so a macro has no owner even when the directive sits inside a class or a
+     * function body: it is pushed at file scope, where a caller looking for `#define` will find it. The value is the
+     * body, which makes a log string or an error message inside a macro reachable by literal body search.
+     */
+    private visitMacro(node: SyntaxNode): void {
+        const nameNode = node.childForFieldName("name") ?? findFirst(node, "identifier");
+
+        if (nameNode === null) {
+            return;
+        }
+
+        const value = node.childForFieldName("value");
+        const parameters = node.childForFieldName("parameters");
+        const name = this.textOf(nameNode).trim();
+        const endIndex = this.macroEnd(node);
+        const declaration: Declaration = {
+            kind: "macro",
+            name,
+            qualifiedName: name,
+            signature: this.macroSignature(node),
+            range: this.rangeOf(node.startIndex, endIndex),
+            bodyRange: value === null ? undefined : this.rangeOf(value.startIndex, value.endIndex),
+            nameRange: this.nameRangeOf(nameNode),
+            docRange: this.docRangeOf(node),
+            paramTypes:
+                parameters === null
+                    ? []
+                    : namedChildren(parameters)
+                          .map((parameter) => this.textOf(parameter).trim())
+                          .filter((parameter) => parameter.length > 0),
+            isDefinition: true,
+            children: [],
+            language: this.language,
+        };
+
+        this.push(declaration, undefined);
+    }
+
+    /** The declaration line of a macro: the first line, without the continuation backslash. */
+    private macroSignature(node: SyntaxNode): string {
+        const firstLine = this.textOf(node).split("\n")[0] ?? "";
+
+        return this.collapse(firstLine.replace(/\\\s*$/, ""));
+    }
+
+    /** `node.endIndex` includes the directive's newline; a range should not. */
+    private macroEnd(node: SyntaxNode): number {
+        let end = node.endIndex;
+
+        while (end > node.startIndex && /\s/.test(this.source[end - 1] ?? "")) {
+            end -= 1;
+        }
+
+        return end;
     }
 
     /**

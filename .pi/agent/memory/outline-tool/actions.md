@@ -55,7 +55,7 @@ honest boundary is "no identifier or doc comment spells it out", not "no such co
 4,000-character `limit`, 1 MB file cap, 2k mapped files (patterns are walker-applied, so the cap counts matches),
 and build/out/cmake-build/third_party/generated ignored. files over 1,500 lines render top-level declarations only, and digest
  degrades to a directory map over the limit. Scanning `.` honors ignore files; an explicitly named subdirectory is
-literal, so ignored fixtures stay reachable. With a directory `path`, `show` pairs headers with definitions and
+literal, so ignored fixtures stay reachable. C/C++ `#define` and Rust `macro_rules!` are `macro` declarations (signature the first line, body the value or first rule) at file scope, because the preprocessor is textual; every preprocessor branch is indexed, so `kind=macro`, `show`, and literal body search all reach them. With a directory `path`, `show` pairs headers with definitions and
 lists same-signature definitions across files — a digest row's `:start-end` is the span to `read`.
 
 ## `show`: a name, or a heading

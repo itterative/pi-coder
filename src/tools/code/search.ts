@@ -15,7 +15,7 @@ import {
     discoveryCapNote,
     filterNote,
     isContainer,
-    isFunctionLike,
+    isDefinitionTagged,
     kindLabel,
     normalizeSymbol,
     lineRange,
@@ -1095,7 +1095,7 @@ function declarationTag(declaration: Declaration): string {
         return "";
     }
 
-    if (!isFunctionLike(declaration.kind) && !isContainer(declaration.kind)) {
+    if (!isDefinitionTagged(declaration.kind) && !isContainer(declaration.kind)) {
         return "";
     }
 
