@@ -5,6 +5,7 @@ import {
     SERIALIZATION_SYSTEM_PROMPT,
     checkpointSectionCount,
     segmentSummaryInstruction,
+    serializedSummarizationRequest,
 } from "../../../src/modules/compaction/prompt";
 import { compactionPreparation } from "../../helpers/compaction-doubles";
 
@@ -49,5 +50,24 @@ describe("checkpoint section counting", () => {
         expect(text).toContain("kept as-is below");
         expect(text).not.toContain("retained verbatim");
         expect(SERIALIZATION_SYSTEM_PROMPT).toContain("transcript");
+    });
+});
+
+describe("stage 2 request", () => {
+    it("calls the transcript the span being folded away, never the whole conversation", () => {
+        // The span ends at firstKeptEntryId; a bounded tail follows the checkpoint and is not sent. On the
+        // stage-1-failure route this sentence is the reduce's only framing of what it was given.
+        const withoutCheckpoint = serializedSummarizationRequest({
+            conversationText: "[User] ship the split",
+        });
+        const withCheckpoint = serializedSummarizationRequest({
+            conversationText: "[User] ship the split",
+            segmentSummary: "## Goal\nship the split",
+        });
+
+        expect(withoutCheckpoint).toContain("the span being folded away");
+        expect(withoutCheckpoint).toContain("rather than all of it");
+        expect(withCheckpoint).toContain("this same span");
+        expect(withCheckpoint).not.toContain("whole conversation");
     });
 });

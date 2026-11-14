@@ -215,7 +215,7 @@ export function serializedSummarizationRequest(input: SerializedRequestInput): s
     const guidance: string[] = [];
     if (segmentBlock) {
         guidance.push(
-            "<segment-checkpoint> is an intermediate summary of this same conversation, written by the",
+            "<segment-checkpoint> is an intermediate summary of this same span, written by the",
             "assistant that still had it in context; <conversation> is a minimized transcript of it. Prefer",
             "the transcript where they disagree, and use the checkpoint where the transcript was compressed",
             "away. Your output replaces both, so it must be no longer than the checkpoint you were given:",
@@ -223,8 +223,8 @@ export function serializedSummarizationRequest(input: SerializedRequestInput): s
         );
     } else {
         guidance.push(
-            "The transcript is the whole conversation to summarize. It has been minimized, so tool output",
-            "may be truncated; do not guess at what was dropped.",
+            "The transcript is the span being folded away, a minimized part of the conversation rather",
+            "than all of it. Tool output may be truncated; do not guess at what was dropped.",
         );
     }
     if (previousBlock) {

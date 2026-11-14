@@ -52,7 +52,10 @@ One bounded text-only call over `serializeConversationMinimal(span)` + stage 1's
 `<previous-summary>` **only when stage 1 did not run** (stage 1's instruction already carries it forward, so
 feeding both invites a union of duplicates). Transcript-first on disagreement, checkpoint fills what compression
 removed, and the output must be no longer than the checkpoint it was given — merge and drop, never concatenate.
-The cap is 32,000 tokens (2026-11-14): at 12,000 a healthy span used ~98% of it and lost its oldest blocks, which
+The fallback branch calls the transcript "the span being folded away, a minimized part of the conversation rather
+than all of it" — the retained tail is not in the request, and on the stage-1-failure route this sentence is the
+reduce's only framing, so "the whole conversation" made it write as if the transcript ended the session. The
+cap is 32,000 tokens (2026-11-14): at 12,000 a healthy span used ~98% of it and lost its oldest blocks, which
 are the ones the checkpoint compressed hardest and the ones "prefer the transcript" cannot recover.
 
 `overflow` **attempts** stage 1: it used to be skipped outright, on the reasoning that the live context provably
