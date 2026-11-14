@@ -1,7 +1,16 @@
 import { yieldToEventLoop } from "../../common/async";
-import { BODY_ROWS, BODY_ROWS_WHEN_LED, bodyQueryOf, collectBodyHits } from "./body";
+import {
+    BODY_ROWS,
+    BODY_ROWS_WHEN_LED,
+    bodyQueryOf,
+    collectBodyHits,
+    type BodyQuery,
+} from "./body";
+import type { CommentBlock } from "./comment-blocks";
+import { collectCommentHits } from "./comment-search";
 import { discoverFiles, filterPathTarget, parsePathTarget, patternWithinTarget } from "./discovery";
 import {
+    bodyThenFooter,
     discoveryCapNote,
     filterNote,
     isContainer,
@@ -23,7 +32,7 @@ import { withinLine, withinResolution, withinScope } from "./scope";
 import { tokenize } from "./semantic/bm25";
 import { stem } from "./stem";
 import type { CodeChunk } from "./semantic/chunks";
-import { TAIL_ROWS, declarationKey, leadsWithRelated, wantsTail } from "./semantic/rank";
+import { TAIL_ROWS, declarationKey, leadsWithRelated, rankKeyOf, wantsTail } from "./semantic/rank";
 import type { SemanticSearch } from "./semantic/types";
 import type { CodeSource } from "./source";
 import { declarationDoc, normalizeText } from "./text";
@@ -65,11 +74,17 @@ const TIER_DOC_PHRASE = 3;
 const TIER_FRONTMATTER_PHRASE = 4;
 const TIER_FRONTMATTER = 5;
 const TIER_DOC = 6;
+/** Literal text in a comment block no declaration owns: prose evidence, like a body hit. */
+const TIER_COMMENT = 7;
 /** Literal text found in a declaration body: exact evidence, weaker than prose, stronger than a guess. */
-const TIER_BODY = 7;
-const TIER_FUZZY = 8;
+const TIER_BODY = 8;
+const TIER_FUZZY = 9;
 /** Relevance-tail rows: real declarations, but ranked by meaning rather than by name. */
-const TIER_RELATED = 9;
+const TIER_RELATED = 10;
+
+/** Comment rows on a page. The channel is prose evidence, so it stays a handful. */
+const COMMENT_ROWS = 6;
+const COMMENT_ROWS_WHEN_LED = 2;
 
 /** Keep near-miss names from flooding the output when a concept word fuzzily matches many identifiers. */
 const FUZZY_ROW_LIMIT = 8;
@@ -99,12 +114,15 @@ interface ParsedQuery {
 
 interface SearchHit {
     file: ParsedFile;
-    declaration: Declaration;
-    /** 0 exact, 1 prefix, 2 substring, 3-6 doc text, 7 body text, 8 approximate, 9 related. */
+    /** Absent on a comment row, which names a block of prose no declaration owns. */
+    declaration?: Declaration;
+    /** Present on a comment row: the block itself, so the row can print its range and lead. */
+    comment?: CommentBlock;
+    /** 0 exact, 1 prefix, 2 substring, 3-6 doc text, 7 comment text, 8 body text, 9 approximate, 10 related. */
     tier: number;
     /** Present only for approximate results. */
     distance?: number;
-    /** Present only for body-text rows: where the text sits, and how often it occurs. */
+    /** Present for body-text and comment rows: where the text sits, and how often it occurs. */
     body?: { line: number; text: string; count: number };
     /** Present when a body chunk produced the similarity score, so the row can name the span that matched. */
     chunk?: CodeChunk;
@@ -165,12 +183,10 @@ export async function runSearch(
 
     if (targeted.files.length === 0) {
         return {
-            text: [
-                `# search ${quotedForMessage(query)} in ${scope} · no files match`,
-                discovery.truncated ? discoveryCapNote() : "",
-            ]
-                .filter((line) => line.length > 0)
-                .join("\n"),
+            text: bodyThenFooter(
+                [`# search ${quotedForMessage(query)} in ${scope} · no files match`],
+                [discovery.truncated ? discoveryCapNote() : ""],
+            ),
             files: 0,
             parseErrors: 0,
             truncated: discovery.truncated,
@@ -216,15 +232,15 @@ export async function runSearch(
 
     if (parsed.length === 0) {
         return {
-            text: [
-                `# search ${quotedForMessage(query)} in ${scope} · no readable supported files`,
-                batch.tooLarge > 0
-                    ? `# skipped: ${batch.tooLarge} file(s) above the size limit`
-                    : "",
-                ...batch.errors.slice(0, 3).map((error) => `# ${error}`),
-            ]
-                .filter((line) => line.length > 0)
-                .join("\n"),
+            text: bodyThenFooter(
+                [`# search ${quotedForMessage(query)} in ${scope} · no readable supported files`],
+                [
+                    batch.tooLarge > 0
+                        ? `# skipped: ${batch.tooLarge} file(s) above the size limit`
+                        : "",
+                    ...batch.errors.slice(0, 3).map((error) => `# ${error}`),
+                ],
+            ),
             files: 0,
             parseErrors,
             truncated: discovery.truncated,
@@ -237,14 +253,17 @@ export async function runSearch(
         params.kind !== undefined && isDeclarationKind(params.kind) ? params.kind : undefined;
     const matchesKind = (declaration: Declaration): boolean =>
         kind === undefined || declaration.kind === kind;
+    // A comment row carries no declaration kind, so a kind filter excludes it rather than guessing.
+    const ownsKind = (hit: SearchHit): boolean =>
+        hit.declaration === undefined ? kind === undefined : matchesKind(hit.declaration);
     const literalAll = await timing.measure("search", () => collectLiteral(parsed, query, signal));
-    const literal = literalAll.filter((hit) => matchesKind(hit.declaration));
+    const literal = literalAll.filter(ownsKind);
     const docMatches = literal.reduce((count, hit) => count + (isDocTier(hit.tier) ? 1 : 0), 0);
     // Counted apart from body doc text because the rows are labelled apart: a summary that calls a `[frontmatter]`
     // row "by doc text" describes the same rows with two names.
     const frontmatterMatches = literal.reduce(
         (count, hit) =>
-            count + (hit.declaration.kind === "frontmatter" && isDocTier(hit.tier) ? 1 : 0),
+            count + (hit.declaration?.kind === "frontmatter" && isDocTier(hit.tier) ? 1 : 0),
         0,
     );
     // Literal body text: exact evidence, gated on query shape rather than on the lexical pass, because a strong
@@ -268,6 +287,18 @@ export async function runSearch(
         tier: TIER_BODY,
         body: { ...hit.evidence, count: hit.count },
     }));
+    const comment = await timing.measure("search", () =>
+        commentChannel({
+            parsed,
+            bodyQuery,
+            kindSpecified: kind !== undefined,
+            led: ledByNameOrDoc,
+            signal,
+        }),
+    );
+    const commentRows = comment.rows;
+    const commentWithheld = comment.withheld;
+    const commentMatches = commentRows.length;
     const folded = foldBodyRows(literal, bodyRows);
     const literalRows = folded.literal;
     const standaloneBody = folded.body;
@@ -277,19 +308,21 @@ export async function runSearch(
         literal.length === 0
             ? await timing.measure("search", () => collectFuzzy(parsed, query, signal))
             : undefined;
-    const fuzzyHits = (fuzzy?.hits ?? []).filter((hit) => matchesKind(hit.declaration));
+    const fuzzyHits = (fuzzy?.hits ?? []).filter(ownsKind);
     const hiddenTotal = kindHidden + ((fuzzy?.hits.length ?? 0) - fuzzyHits.length);
     // A name or doc-phrase hit is the precise answer and stays first. Anything weaker is prose, which the embedding
     // channel answers better than a doc tier that merely saw every word somewhere, so there its rows lead. Body
     // evidence is literal and keeps its place ahead of the related rows for the same reason.
     const strongMatch =
-        literalRows.some((hit) => hit.tier <= TIER_FRONTMATTER_PHRASE) || bodyMatches > 0;
+        literalRows.some((hit) => hit.tier <= TIER_FRONTMATTER_PHRASE) ||
+        bodyMatches > 0 ||
+        commentMatches > 0;
     const leads = leadsWithRelated(strongMatch);
     // A typo of an identifier is precise evidence too, so a fuzzy result keeps priority over related rows; a
     // lexical-led answer still takes a related tail when it is thin, exactly as before.
     const wantsRelated =
         fuzzyHits.length === 0 &&
-        (leads || wantsTail(literalRows.length + bodyMatches, docMatches));
+        (leads || wantsTail(literalRows.length + bodyMatches + commentMatches, docMatches));
     const related = wantsRelated
         ? (
               await timing.measure("tail", () =>
@@ -301,15 +334,15 @@ export async function runSearch(
                       root,
                       query,
                       discovery.truncated,
-                      [...literalRows, ...standaloneBody, ...fuzzyHits],
+                      [...literalRows, ...standaloneBody, ...commentRows, ...fuzzyHits],
                       signal,
                   ),
               )
-          ).filter((hit) => matchesKind(hit.declaration))
+          ).filter(ownsKind)
         : [];
-    const relatedKeys = new Set(related.map((hit) => declarationKey(hit.file, hit.declaration)));
-    const lexicalRest = [...literalRows, ...standaloneBody, ...fuzzyHits].filter(
-        (hit) => !relatedKeys.has(declarationKey(hit.file, hit.declaration)),
+    const relatedKeys = new Set(related.map((hit) => hitKey(hit)));
+    const lexicalRest = [...literalRows, ...standaloneBody, ...commentRows, ...fuzzyHits].filter(
+        (hit) => !relatedKeys.has(hitKey(hit)),
     );
     const hits = leads ? relatedLedPage(related, lexicalRest) : [...lexicalRest, ...related];
     const total = hits.length;
@@ -333,13 +366,12 @@ export async function runSearch(
                 : "no declarations match";
 
         return {
-            text: [
-                `# ${reason} ${quotedForMessage(query)} in ${scope} · ${fileCount(parsed.length)} · ${languages}`,
-                filter ?? "",
-                within ?? "",
-            ]
-                .filter((line) => line.length > 0)
-                .join("\n"),
+            text: bodyThenFooter(
+                [
+                    `# ${reason} ${quotedForMessage(query)} in ${scope} · ${fileCount(parsed.length)} · ${languages}`,
+                ],
+                [filter, within],
+            ),
             files: parsed.length,
             parseErrors,
             truncated: discovery.truncated,
@@ -357,6 +389,7 @@ export async function runSearch(
         docMatches - frontmatterMatches,
         frontmatterMatches,
         bodyRows.length,
+        commentMatches,
         related.length,
     );
     const rows = hits.map((hit) => renderHit(source, hit));
@@ -371,6 +404,8 @@ export async function runSearch(
         relatedMatches: related.length,
         bodyMatches: bodyMatches,
         bodyWithheld,
+        commentMatches,
+        commentWithheld,
         displacedLiteral: displaced,
         filter,
         within,
@@ -378,9 +413,7 @@ export async function runSearch(
     });
     const hint = related.length > 0 && semantic?.hint !== undefined ? [semantic.hint] : [];
     const next = nextOffsetNote(fitted);
-    const text = [fitted.text, next, ...footer, ...hint]
-        .filter((part): part is string => part !== undefined && part.length > 0)
-        .join("\n");
+    const text = bodyThenFooter([fitted.text], [next, ...footer, ...hint]);
 
     return {
         text,
@@ -388,6 +421,39 @@ export async function runSearch(
         parseErrors,
         truncated: discovery.truncated || fitted.truncated,
         matches: literalTotal,
+    };
+}
+
+/**
+ * Comment blocks: the prose no declaration owns — a file header, a note between statements.
+ *
+ * Gated like the body channel, because a single word is an identifier question, and suppressed under a kind filter,
+ * which has no comment kind to name.
+ */
+async function commentChannel(options: {
+    parsed: readonly ParsedFile[];
+    bodyQuery: BodyQuery | undefined;
+    kindSpecified: boolean;
+    led: boolean;
+    signal?: AbortSignal;
+}): Promise<{ rows: SearchHit[]; withheld: number }> {
+    const { bodyQuery } = options;
+
+    if (bodyQuery === undefined || options.kindSpecified) {
+        return { rows: [], withheld: 0 };
+    }
+
+    const hits = await collectCommentHits(options.parsed, bodyQuery, options.signal);
+    const kept = hits.slice(0, options.led ? COMMENT_ROWS_WHEN_LED : COMMENT_ROWS);
+
+    return {
+        rows: kept.map((hit) => ({
+            file: hit.file,
+            comment: hit.block,
+            tier: TIER_COMMENT,
+            body: { ...hit.evidence, count: hit.count },
+        })),
+        withheld: hits.length - kept.length,
     };
 }
 
@@ -622,9 +688,7 @@ async function collectRelated(
     }
 
     // A related-first page skips nothing: its own rows come first, and the lexical ones are filtered after it.
-    const shownKeys = new Set(
-        leads ? [] : shown.map((hit) => declarationKey(hit.file, hit.declaration)),
-    );
+    const shownKeys = new Set(leads ? [] : shown.map((hit) => hitKey(hit)));
     const ranked = await semantic.rank(
         {
             query: query.raw,
@@ -639,7 +703,7 @@ async function collectRelated(
     const tail: SearchHit[] = [];
 
     for (const entry of ranked) {
-        const key = declarationKey(entry.file, entry.declaration);
+        const key = rankKeyOf(entry);
 
         if (shownKeys.has(key)) {
             continue;
@@ -649,6 +713,7 @@ async function collectRelated(
         tail.push({
             file: entry.file,
             declaration: entry.declaration,
+            comment: entry.comment,
             tier: TIER_RELATED,
             chunk: entry.chunk,
         });
@@ -716,7 +781,7 @@ async function collectFuzzy(
     const sorted = hits.toSorted((left, right) => {
         return (
             (left.distance ?? 0) - (right.distance ?? 0) ||
-            left.declaration.name.length - right.declaration.name.length ||
+            (left.declaration?.name.length ?? 0) - (right.declaration?.name.length ?? 0) ||
             compareHits(left, right)
         );
     });
@@ -765,14 +830,65 @@ function compareHits(left: SearchHit, right: SearchHit): number {
     return (
         left.tier - right.tier ||
         left.file.path.localeCompare(right.file.path) ||
-        left.declaration.range.startLine - right.declaration.range.startLine ||
-        left.declaration.qualifiedName.localeCompare(right.declaration.qualifiedName)
+        hitStartLine(left) - hitStartLine(right) ||
+        (left.declaration?.qualifiedName ?? "").localeCompare(
+            right.declaration?.qualifiedName ?? "",
+        )
     );
 }
 
+/**
+ * Stable identity for a row: a declaration's byte start, or a comment block's.
+ *
+ * A comment names no declaration, so it needs its own key for the dedupe between the lexical and related channels.
+ */
+function hitKey(hit: SearchHit): string {
+    if (hit.declaration !== undefined) {
+        return declarationKey(hit.file, hit.declaration);
+    }
+
+    return `${hit.file.path}\u0000comment\u0000${hit.comment?.startIndex ?? 0}`;
+}
+
+function hitStartLine(hit: SearchHit): number {
+    return hit.declaration?.range.startLine ?? hit.comment?.startLine ?? 0;
+}
+
+/** The line span a row names, whether it is a declaration or a comment block. */
+function hitRange(hit: SearchHit): string {
+    if (hit.comment !== undefined) {
+        const { startLine, endLine } = hit.comment;
+
+        return startLine === endLine ? `${startLine}` : `${startLine}-${endLine}`;
+    }
+
+    return hit.declaration === undefined ? "" : lineRange(hit.declaration.range);
+}
+
 function renderHit(source: CodeSource, hit: SearchHit): string {
+    const location = `${source.displayPath(hit.file.path)}:${hitRange(hit)}`;
+
+    // A comment row names a block of prose that `show` cannot return, so it prints its own range and evidence inside
+    // it: a bare `comment :1-9` would tell a caller where to look but not whether it is worth the read.
+    if (hit.comment !== undefined) {
+        const channel = channelTag(hit);
+        const evidence = hit.body;
+
+        if (evidence === undefined) {
+            return `${location}  comment  "${hit.comment.lead}"${channel}`;
+        }
+
+        const count = evidence.count > 1 ? `  ×${evidence.count}` : "";
+
+        return `${location}  comment${channel}${count}\n  :${evidence.line}  ${shortLine(undecoratedComment(evidence.text))}`;
+    }
+
     const declaration = hit.declaration;
-    const location = `${source.displayPath(hit.file.path)}:${lineRange(declaration.range)}`;
+
+    if (declaration === undefined) {
+        return location;
+    }
+
     const tag = declarationTag(declaration);
     const channel = channelTag(hit);
     const approximate = hit.distance === undefined ? "" : ` ~${hit.distance}`;
@@ -856,11 +972,22 @@ function displacedLiteral(
         return undefined;
     }
 
-    const where = `${source.displayPath(first.file.path)}:${lineRange(first.declaration.range)}`;
-    const label = first.declaration.blockCallee ?? kindLabel(first.declaration.kind);
+    const where = `${source.displayPath(first.file.path)}:${hitRange(first)}`;
     const noun = count === 1 ? "literal row follows" : `${count} literal rows follow`;
 
-    return `# also: ${noun} the related guesses · ${where} ${label} ${first.declaration.qualifiedName}${channelTag(first)}`;
+    if (first.comment !== undefined) {
+        return `# also: ${noun} the related guesses · ${where} comment "${first.comment.lead}"${channelTag(first)}`;
+    }
+
+    const declaration = first.declaration;
+
+    if (declaration === undefined) {
+        return undefined;
+    }
+
+    const label = declaration.blockCallee ?? kindLabel(declaration.kind);
+
+    return `# also: ${noun} the related guesses · ${where} ${label} ${declaration.qualifiedName}${channelTag(first)}`;
 }
 
 /**
@@ -876,12 +1003,22 @@ function foldBodyRows(
     bodyRows: readonly SearchHit[],
 ): { literal: SearchHit[]; body: SearchHit[] } {
     const listed = new Map(
-        literal.map((hit) => [declarationKey(hit.file, hit.declaration), { ...hit }]),
+        literal
+            .filter(hasDeclaration)
+            .map((hit) => [declarationKey(hit.file, hit.declaration), { ...hit }]),
     );
     const kept: SearchHit[] = [];
 
     for (const row of bodyRows) {
-        const own = listed.get(declarationKey(row.file, row.declaration));
+        const declaration = row.declaration;
+
+        if (declaration === undefined) {
+            kept.push(row);
+
+            continue;
+        }
+
+        const own = listed.get(declarationKey(row.file, declaration));
 
         if (own !== undefined) {
             own.body ??= row.body;
@@ -895,8 +1032,8 @@ function foldBodyRows(
             Array.from(listed.values()).some(
                 (hit) =>
                     hit.file.path === row.file.path &&
-                    hit.declaration.range.startLine <= line &&
-                    line <= hit.declaration.range.endLine,
+                    (hit.declaration?.range.startLine ?? 0) <= line &&
+                    line <= (hit.declaration?.range.endLine ?? 0),
             );
 
         if (!insideListed) {
@@ -907,8 +1044,28 @@ function foldBodyRows(
     return { literal: Array.from(listed.values()), body: kept };
 }
 
+/**
+ * A comment's evidence line without its decoration.
+ *
+ * The block's text is stripped, but the evidence line is read from the source, so a `*` or `//` prefix would be the
+ * first thing the row shows on a row that is about prose.
+ */
+function undecoratedComment(text: string): string {
+    return text.replace(/^\s*(?:\/\*+|\*\/+|\*|\/\/+)\s?/, "").trim();
+}
+
+function hasDeclaration(hit: SearchHit): hit is SearchHit & { declaration: Declaration } {
+    return hit.declaration !== undefined;
+}
+
 function channelTag(hit: SearchHit): string {
-    if (hit.declaration.kind === "frontmatter" && isDocTier(hit.tier)) {
+    if (hit.comment !== undefined) {
+        // The row's kind column already says `comment`, so only the guess tag is left to add: a block reached by
+        // similarity is still a guess, and the "guesses are not matches" rule has to hold.
+        return hit.tier === TIER_RELATED ? " [related]" : "";
+    }
+
+    if (hit.declaration?.kind === "frontmatter" && isDocTier(hit.tier)) {
         return " [frontmatter]";
     }
 
@@ -946,6 +1103,7 @@ function headerFor(
     docMatches: number,
     frontmatterMatches: number,
     bodyMatches: number,
+    commentMatches: number,
     relatedMatches: number,
 ): string {
     const summary = matchSummary(
@@ -953,6 +1111,7 @@ function headerFor(
         docMatches,
         frontmatterMatches,
         bodyMatches,
+        commentMatches,
         approximate,
         relatedMatches,
     );
@@ -961,7 +1120,8 @@ function headerFor(
 }
 
 /**
- * Name, doc, body, and relevance channels are counted separately so a reader can tell which one produced a row.
+ * Name, doc, body, comment, and relevance channels are counted separately so a reader can tell which one produced a
+ * row.
  *
  * `literal` excludes the related rows on purpose. Counting them made `3 matches` out of three similarity guesses, and
  * a caller reads that number as "the identifier exists"; with no literal row the summary says so instead.
@@ -971,6 +1131,7 @@ function matchSummary(
     docMatches: number,
     frontmatterMatches: number,
     bodyMatches: number,
+    commentMatches: number,
     approximate: boolean,
     relatedMatches: number,
 ): string {
@@ -988,6 +1149,10 @@ function matchSummary(
 
     if (bodyMatches > 0) {
         channels.push(`${bodyMatches} by body text`);
+    }
+
+    if (commentMatches > 0) {
+        channels.push(`${commentMatches} by comment text`);
     }
 
     if (relatedMatches > 0) {
@@ -1014,6 +1179,8 @@ function footerFor(options: {
     relatedMatches: number;
     bodyMatches: number;
     bodyWithheld: number;
+    commentMatches: number;
+    commentWithheld: number;
     displacedLiteral: string | undefined;
     filter: string | undefined;
     within: string | undefined;
@@ -1036,6 +1203,17 @@ function footerFor(options: {
     if (options.bodyWithheld > 0) {
         footer.push(
             `# body: ${counted(options.bodyWithheld, "more declaration")} withheld; a name or doc match already leads, so the page keeps the strongest rows`,
+        );
+    }
+
+    if (options.commentMatches > 0) {
+        const withheld =
+            options.commentWithheld > 0
+                ? ` · ${counted(options.commentWithheld, "more block")} withheld`
+                : "";
+
+        footer.push(
+            `# comment: prose no declaration owns — a file header or a note between statements · the row quotes the matching line, and the span is what read wants${withheld}`,
         );
     }
 

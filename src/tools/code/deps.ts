@@ -1,7 +1,13 @@
 import path from "node:path";
 
 import { discoverFiles, parsePathTarget, type Discovery } from "./discovery";
-import { discoveryCapNote, nextOffsetNote, renderWithinBudget, scopeLabel } from "./format";
+import {
+    bodyThenFooter,
+    discoveryCapNote,
+    nextOffsetNote,
+    renderWithinBudget,
+    scopeLabel,
+} from "./format";
 import {
     createResolveIndex,
     dependentsOf,
@@ -87,15 +93,15 @@ export async function runDeps(
 
     if (subject === undefined) {
         return {
-            text: [
-                `# deps ${source.displayPath(target)} · not parsed`,
-                batch.tooLarge > 0
-                    ? `# skipped: ${batch.tooLarge} file(s) above the size limit`
-                    : "",
-                ...batch.errors.slice(0, 3).map((error) => `# ${error}`),
-            ]
-                .filter((line) => line.length > 0)
-                .join("\n"),
+            text: bodyThenFooter(
+                [`# deps ${source.displayPath(target)} · not parsed`],
+                [
+                    batch.tooLarge > 0
+                        ? `# skipped: ${batch.tooLarge} file(s) above the size limit`
+                        : "",
+                    ...batch.errors.slice(0, 3).map((error) => `# ${error}`),
+                ],
+            ),
             files: parsed.length,
             parseErrors,
             truncated: discovery.truncated,
@@ -135,9 +141,7 @@ export async function runDeps(
     });
 
     return {
-        text: [fitted.text, next, ...footer]
-            .filter((part): part is string => part !== undefined && part.length > 0)
-            .join("\n"),
+        text: bodyThenFooter([fitted.text], [next, ...footer]),
         files: parsed.length,
         parseErrors,
         truncated: discovery.truncated || fitted.truncated,

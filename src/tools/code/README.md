@@ -3,7 +3,8 @@
 One agent-facing tool, `outline`, with six actions:
 
 - `digest` — map a file or directory: namespaces/types, public signatures, block titles, line ranges, `[def]` tags.
-- `search` — declarations whose name, doc comment, frontmatter, or literal body text matches a query, with a
+- `search` — declarations whose name, doc comment, frontmatter, or literal body text matches a query, plus the
+  comment blocks no declaration owns, with a
   conservative typo fallback.
 - `show` — exact source for named symbols; a directory target pairs header declarations with source definitions.
 - `usages` — syntactic occurrences with `[def]` / `[decl]` / `[call]` / `[ref]` tags, plus `[launch]` for
@@ -291,7 +292,26 @@ fragments — and reports **the declaration that contains it**, not the line. Th
     test/deps.test.ts:49-63  it  "separates local, external, and unresolved imports"  (outline deps)
       :56  expect(result.text).toContain("4 imports");  ×2
 
-Three rules keep it from becoming a second grep:
+### Comment blocks
+
+Prose that belongs to no declaration — a file header above the imports, a note between two top-level statements — is
+in neither the doc channel (nothing owns it) nor the body channel (it is outside every body). It gets its own
+channel, one row per block, with the matching line quoted because `show` has no name to take:
+
+    src/modules/decision/window.ts:1-9  comment
+      :1  The window allocator: spend a char budget on the items that carry the most context.
+
+`commentBlocksOf` (`comment-blocks.ts`) scans a file's comments and keeps what no declaration's range or `docRange`
+covers, merging a `//` run into one block, dropping anything under 60 characters or without prose, and capping the
+text at the body-chunk limit. Blocks are **file**-granular, not declaration-granular: the row's span is what `read`
+wants, and the footer says so. A kind filter suppresses them, because a comment has no declaration kind to name.
+
+The channel is literal *and* semantic: each block also gets a vector keyed by its text (`commentEntriesOf` in
+`semantic/index.ts`), so a paraphrase lands on a file whose own header answers it. A block reached only by
+similarity is tagged `[related]` — a guess, never counted as a match. Doc comments are not duplicated this way: they
+are already embedded in the head vector of the declaration that owns them, and counted as `[doc]` rows.
+
+Three rules keep the body channel from becoming a second grep:
 
 - **Text-shaped queries only.** At least two whitespace-separated words. A single word is an identifier question,
   and every body that mentions `connect` would otherwise flood a result `usages` already answers properly.
@@ -385,8 +405,9 @@ costs what `usages` costs, and imports are cached per `ParsedFile` so an edited 
   top-level call sites · outline(action="flow", path="…") lists them`, or a re-export/comment-only line when it
   holds no calls. The count costs one usage-index pass, and only on the empty path — `src/index.ts` reporting
   "nothing" was the answer that taught an agent the tool does not apply to entrypoints.
-- `digest` degrades to a directory map when the result exceeds the character limit, and large files (`[huge]`) render
-  only top-level declarations. `detail="full"` includes private/protected members, fields, enum members, and
+- `digest` degrades to a directory map when the result exceeds the character limit, and files over 1,500 lines
+  render only top-level declarations. A file header states its line count (`src/net/socket.h [26 lines]`), so a
+  reader can tell how much of the file the rows cover. `detail="full"` includes private/protected members, fields, enum members, and
   nested variables; a **root** variable is a module constant and is part of the signature list too. Declaration rows
   show `:start-end` when the declaration spans lines, and `:line` for a one-liner; `search` locations and `show`
   headers use the same range convention.
@@ -458,8 +479,8 @@ costs what `usages` costs, and imports are cached per `ParsedFile` so an edited 
   no identifier spells it out, and a plausible identifier guess is the weaker evidence.
   Strings, config, and arbitrary source text remain the job of `bash` + `rg`, as do line-level output, regex, and
   counts: the body channel is literal and declaration-granular, so it cannot say *where in the function* the text
-  is or how many files match. A comment between two statements is reachable as a `[body]` row on the enclosing
-  declaration, but only for a text-shaped query. Search hits are cached per parsed file and normalized query (a
+  is or how many files match. A comment inside a declaration is reachable as a `[body]` row on the enclosing
+  declaration; one outside every declaration is a `comment` row instead, both only for a text-shaped query. Search hits are cached per parsed file and normalized query (a
   few recent queries per
   file); a changed path + mtime + size creates a new `ParsedFile` and drops the old hits with it.
 

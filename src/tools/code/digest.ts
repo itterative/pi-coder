@@ -2,6 +2,7 @@ import path from "node:path";
 
 import { discoverFiles, filterPathTarget, parsePathTarget, patternWithinTarget } from "./discovery";
 import {
+    bodyThenFooter,
     counted,
     declarationLine,
     discoveryCapNote,
@@ -73,12 +74,10 @@ export async function runDigest(
 
     if (targeted.files.length === 0) {
         return {
-            text: [
-                `# digest ${scope} · no files match`,
-                discovery.truncated ? discoveryCapNote() : "",
-            ]
-                .filter((line) => line.length > 0)
-                .join("\n"),
+            text: bodyThenFooter(
+                [`# digest ${scope} · no files match`],
+                [discovery.truncated ? discoveryCapNote() : ""],
+            ),
             files: 0,
             parseErrors: 0,
             truncated: discovery.truncated,
@@ -94,15 +93,15 @@ export async function runDigest(
 
     if (parsed.length === 0) {
         return {
-            text: [
-                `# digest ${scope} · no readable supported files`,
-                batch.tooLarge > 0
-                    ? `# skipped: ${batch.tooLarge} file(s) above the size limit`
-                    : "",
-                ...batch.errors.slice(0, 3).map((error) => `# ${error}`),
-            ]
-                .filter((line) => line.length > 0)
-                .join("\n"),
+            text: bodyThenFooter(
+                [`# digest ${scope} · no readable supported files`],
+                [
+                    batch.tooLarge > 0
+                        ? `# skipped: ${batch.tooLarge} file(s) above the size limit`
+                        : "",
+                    ...batch.errors.slice(0, 3).map((error) => `# ${error}`),
+                ],
+            ),
             files: 0,
             parseErrors,
             truncated: discovery.truncated,
@@ -138,12 +137,10 @@ export async function runDigest(
 
     if (kind !== undefined && rendered.every((entry) => entry.hidden === entry.total)) {
         return {
-            text: [
-                `# digest ${scope} · filter kind=${kind} · no matching declarations`,
-                filter ?? "",
-            ]
-                .filter((line) => line.length > 0)
-                .join("\n"),
+            text: bodyThenFooter(
+                [`# digest ${scope} · filter kind=${kind} · no matching declarations`],
+                [filter],
+            ),
             files: parsed.length,
             parseErrors,
             truncated: discovery.truncated,
@@ -174,9 +171,7 @@ export async function runDigest(
         discovery.rootIsFile && signatureHidden.size > 0
             ? `# kinds: ${describeSignatureHides(signatureHidden)} hidden in signatures detail; detail=full lists all`
             : "";
-    const fullText = [header, fullBody, footer, visibilityNote, signaturesNote]
-        .filter((part) => part.length > 0)
-        .join("\n");
+    const fullText = bodyThenFooter([header, fullBody], [footer, visibilityNote, signaturesNote]);
     const fits = fullText.length <= limit;
 
     if (fits && offset === 0) {
@@ -196,7 +191,7 @@ export async function runDigest(
         if (map !== undefined) {
             if (offset === 0) {
                 return {
-                    text: [map, footer].filter((part) => part.length > 0).join("\n"),
+                    text: bodyThenFooter([map], [footer]),
                     files: parsed.length,
                     parseErrors,
                     truncated: true,
@@ -213,9 +208,7 @@ export async function runDigest(
             const next = nextOffsetNote(fitted);
 
             return {
-                text: [fitted.text, next, footer]
-                    .filter((part): part is string => part !== undefined && part.length > 0)
-                    .join("\n"),
+                text: bodyThenFooter([fitted.text], [next, footer]),
                 files: parsed.length,
                 parseErrors,
                 truncated: true,
@@ -227,9 +220,7 @@ export async function runDigest(
     const next = nextOffsetNote(fitted);
 
     return {
-        text: [fitted.text, next, footer, visibilityNote, signaturesNote]
-            .filter((part): part is string => part !== undefined && part.length > 0)
-            .join("\n"),
+        text: bodyThenFooter([fitted.text], [next, footer, visibilityNote, signaturesNote]),
         files: parsed.length,
         parseErrors,
         truncated: fitted.truncated || discovery.truncated,
@@ -243,7 +234,9 @@ async function renderFile(
     kind: DeclarationKind | undefined,
     signal?: AbortSignal,
 ): Promise<RenderedFile> {
-    const header = `${source.displayPath(file.path)} [${sizeLabel(file.lineCount)}]`;
+    // The line count, not a size band: `[tiny]` told a reader nothing they could act on, while `[812 lines]` says both
+    // how big the file is and whether the rows below are all of it.
+    const header = `${source.displayPath(file.path)} [${file.lineCount} ${file.lineCount === 1 ? "line" : "lines"}]`;
     const total = file.all.length;
 
     if (kind !== undefined) {

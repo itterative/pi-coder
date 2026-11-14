@@ -70,15 +70,10 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
         name: "outline",
         label: "Outline",
         description:
-            "Inspect code structure without reading whole files. Supports C/C++/HIP, JavaScript/TypeScript " +
-            "(JSX/TSX), Java, C#, Go, Rust, Python, PHP, Ruby, and Markdown headings; other file types are " +
-            "skipped. Test suites and other named callback blocks are mapped like declarations. Output is " +
-            "character-limited, and a cut result ends with # next: offset=N and the lines it " +
-            "left. For a body over ~40 lines the span is cheaper: every header carries path:start-end, so digest " +
-            "or show locates it and one read offset=start limit=n fetches it. `search` also matches literal text " +
-            "inside declaration bodies ([body] rows, one row per containing declaration); line-level hits, " +
-            "regex, and counts stay with rg. `deps` reports one file's imports and the files that import it; " +
-            "`flow` lists a file's or a scope's call sites by scope.",
+            "Inspect code structure without reading whole files. Covers C/C++/HIP, JavaScript/TypeScript " +
+            "(JSX/TSX), Java, C#, Go, Rust, Python, PHP, Ruby, and Markdown headings; anything else is " +
+            "skipped. Output is character-limited: a cut result ends with `# next: offset=N`, and every " +
+            "header carries `path:start-end`, so a large body costs one `read offset=start limit=n`.",
         promptSnippet:
             "Map code before reading: digest a file (declarations, test suites, scripts), search names/docs/body " +
             "text, show a body, flow its calls, find usages. Prefer over rg/read.",

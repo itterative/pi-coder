@@ -1,3 +1,4 @@
+import type { CommentBlock } from "../comment-blocks";
 import type { CodeChunk } from "./chunks";
 import type { Declaration, ParsedFile } from "../types";
 
@@ -39,7 +40,15 @@ export const RRF_K = 60;
 
 export interface RankedDeclaration {
     file: ParsedFile;
-    declaration: Declaration;
+    /** Absent only when `comment` names the owner: a comment block no declaration owns. */
+    declaration?: Declaration;
+    /**
+     * Set when the score came from a comment block no declaration owns rather than from the declaration's head.
+     *
+     * The row then names the block, not the declaration: `declaration` still says what the file's entry point is, so
+     * a caller that prints one column can fall back to it.
+     */
+    comment?: CommentBlock;
     /** Set when a body chunk, not the declaration's head vector, produced the winning score. */
     chunk?: CodeChunk;
 }
@@ -47,6 +56,19 @@ export interface RankedDeclaration {
 /** Stable identity for a declaration across rankings: its file and byte start. */
 export function declarationKey(file: ParsedFile, declaration: Declaration): string {
     return `${file.path}\u0000${declaration.range.startIndex}`;
+}
+
+/** Stable identity for a ranked owner, whether it is a declaration or a comment block. */
+export function rankKeyOf(owner: {
+    file: ParsedFile;
+    declaration?: Declaration;
+    comment?: CommentBlock;
+}): string {
+    if (owner.declaration !== undefined) {
+        return declarationKey(owner.file, owner.declaration);
+    }
+
+    return `${owner.file.path}\u0000comment\u0000${owner.comment?.startIndex ?? 0}`;
 }
 
 /**
@@ -64,7 +86,7 @@ export function fuseRankings(
 
     for (const list of lists) {
         for (const [index, entry] of list.entries()) {
-            const key = declarationKey(entry.file, entry.declaration);
+            const key = rankKeyOf(entry);
             const current = scores.get(key) ?? { entry, score: 0 };
 
             current.score += 1 / (k + index + 1);
@@ -76,9 +98,7 @@ export function fuseRankings(
         .toSorted(
             (left, right) =>
                 right.score - left.score ||
-                declarationKey(left.entry.file, left.entry.declaration).localeCompare(
-                    declarationKey(right.entry.file, right.entry.declaration),
-                ),
+                rankKeyOf(left.entry).localeCompare(rankKeyOf(right.entry)),
         )
         .map((scored) => scored.entry);
 }

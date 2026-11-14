@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { commentBlocksOf } from "../../../src/tools/code/comment-blocks";
 import { clearCodeCache, loadParsedFile } from "../../../src/tools/code/load";
 import {
     buildIndex,
@@ -403,7 +404,95 @@ describe("outline semantic build", () => {
             files,
         });
 
-        expect(ranked[0]?.declaration.name).toBe("promote");
+        expect(ranked[0]?.declaration?.name).toBe("promote");
+    });
+
+    it("indexes a comment block no declaration owns as its own vector", async () => {
+        const root = tempDir();
+        const file = await parseOne(
+            "src/window.ts",
+            [
+                "/**",
+                " * The window allocator: spend a char budget on the items that carry the most context.",
+                " *",
+                " * Every candidate competes for room, and the allocator answers in one pass.",
+                " */",
+                'import { clip } from "./clip";',
+                "",
+                "export function allocate(items: string[], budget: number): string[] {",
+                "    return clip(items, budget);",
+                "}",
+                "",
+            ].join("\n"),
+            1,
+        );
+        const block = commentBlocksOf(file)[0]!;
+        const options = {
+            sourceKind: "local",
+            root: "/project/src",
+            modelDir: root,
+            files: [file],
+        };
+
+        const built = await buildIndex({ ...options, runtime: fakeRuntime(vectorFor("query")) });
+
+        // The head vector plus one for the header: the block belongs to the file, not to `allocate`.
+        expect(built.live).toBe(2);
+        expect(liveEntryKeys([file]).size).toBe(2);
+        expect(countEmbeddings(options).live).toBe(2);
+
+        const semantic = createSemanticSearch({
+            mode: "hybrid",
+            modelDir: root,
+            runtime: fakeRuntime(vectorFor(`title: ${file.path} | text: comment ${block.text}`)),
+            artifactsReady: () => true,
+            autoRefresh: false,
+        });
+        const ranked = await semantic.rank({
+            // No word of this query is in the block, so the hit can only come from the dense channel.
+            query: "zzz plugh xyzzy",
+            root: "/project/src",
+            sourceKind: "local",
+            files: [file],
+        });
+
+        expect(ranked[0]?.comment?.lead).toContain("The window allocator");
+        expect(ranked[0]?.declaration).toBeUndefined();
+        expect(ranked.filter((entry) => entry.comment !== undefined)).toHaveLength(1);
+    });
+
+    it("carries a comment block through the lexical ranking as its own owner", async () => {
+        const file = await parseOne(
+            "src/window.ts",
+            [
+                "/**",
+                " * The window allocator: spend a char budget on the items that carry the most context.",
+                " */",
+                'import { clip } from "./clip";',
+                "",
+                "export function allocate(items: string[]): string[] {",
+                "    return clip(items);",
+                "}",
+                "",
+            ].join("\n"),
+            1,
+        );
+        const semantic = createSemanticSearch({
+            mode: "bm25",
+            modelDir: tempDir(),
+            artifactsReady: () => true,
+            autoRefresh: false,
+        });
+        const ranked = await semantic.rank({
+            query: "window allocator budget",
+            root: "/project/src",
+            sourceKind: "local",
+            files: [file],
+        });
+
+        // The BM25 map used to drop the owner, so a lexical comment hit arrived as a head-less row.
+        expect(ranked[0]?.comment?.lead).toContain("The window allocator");
+        expect(ranked[0]?.declaration).toBeUndefined();
     });
 
     it("ignores a namespace written by a model of another width", async () => {
@@ -719,7 +808,7 @@ describe("outline semantic build", () => {
             files,
         });
 
-        expect(ranked[0]?.declaration.name).toBe("promote");
+        expect(ranked[0]?.declaration?.name).toBe("promote");
     });
 });
 
@@ -945,7 +1034,7 @@ describe("body chunks in the index", () => {
             files: [file],
         });
 
-        expect(ranked[0]?.declaration.name).toBe("long");
+        expect(ranked[0]?.declaration?.name).toBe("long");
         expect(ranked[0]?.chunk?.index).toBe(target.index);
         expect(ranked[0]?.chunk?.startLine).toBe(target.startLine);
     });

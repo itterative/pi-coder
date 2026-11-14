@@ -9,6 +9,7 @@ import {
     patternWithinTarget,
 } from "./discovery";
 import {
+    bodyThenFooter,
     discoveryCapNote,
     filterNote,
     nextOffsetNote,
@@ -146,14 +147,16 @@ export async function runUsages(
 
     if (discovery.files.length === 0) {
         return {
-            text: [
-                `# no usages found for ${requested.join(", ")} in ${scopeLabel(scope)} · ${target.pattern === undefined ? "no supported files" : "no files match"}`,
-                widenNote(scope, requested.join(", ")),
-                filter,
-                discovery.truncated ? discoveryCapNote() : "",
-            ]
-                .filter((line): line is string => line !== undefined && line.length > 0)
-                .join("\n"),
+            text: bodyThenFooter(
+                [
+                    `# no usages found for ${requested.join(", ")} in ${scopeLabel(scope)} · ${target.pattern === undefined ? "no supported files" : "no files match"}`,
+                ],
+                [
+                    widenNote(scope, requested.join(", ")),
+                    filter,
+                    discovery.truncated ? discoveryCapNote() : "",
+                ],
+            ),
             files: 0,
             parseErrors: 0,
             truncated: false,
@@ -224,9 +227,10 @@ export async function runUsages(
         const next = nextOffsetNote(fitted);
 
         return {
-            text: [fitted.text, next, filter, within, truncated ? discoveryCapNote() : undefined]
-                .filter((part): part is string => part !== undefined && part.length > 0)
-                .join("\n"),
+            text: bodyThenFooter(
+                [fitted.text],
+                [next, filter, within, truncated ? discoveryCapNote() : ""],
+            ),
             files: files.length,
             parseErrors,
             truncated: truncated || fitted.truncated,
@@ -239,9 +243,10 @@ export async function runUsages(
     const next = nextOffsetNote(fitted);
 
     return {
-        text: [fitted.text, next, filter, within, truncated ? discoveryCapNote() : undefined]
-            .filter((part): part is string => part !== undefined && part.length > 0)
-            .join("\n"),
+        text: bodyThenFooter(
+            [fitted.text],
+            [next, filter, within, truncated ? discoveryCapNote() : ""],
+        ),
         files: files.length,
         parseErrors,
         truncated: truncated || fitted.truncated,
@@ -662,19 +667,20 @@ function renderSection(
         }
     }
 
-    if (body.length > 0) {
-        body.push(
-            "# note: overloads, generics, templates, macros, and dynamic dispatch are not resolved",
-        );
-    }
+    // Footer notes, not rows: they describe the whole list, so they go under it rather than after the last scope.
+    const notes = [
+        body.length === 0
+            ? undefined
+            : "# note: overloads, generics, templates, macros, and dynamic dispatch are not resolved",
+        mixed
+            ? "# name-only: the name matches but the enclosing type is not the one you qualified; these rows rank after the typed matches"
+            : undefined,
+    ];
+    const page = [headerNotes.join("\n"), body.join("\n")]
+        .filter((part) => part.length > 0)
+        .join("\n\n");
 
-    if (mixed) {
-        body.push(
-            "# name-only: the name matches but the enclosing type is not the one you qualified; these rows rank after the typed matches",
-        );
-    }
-
-    return [headerNotes.join("\n"), body.join("\n")].filter((part) => part.length > 0).join("\n\n");
+    return bodyThenFooter([page], notes);
 }
 
 /**

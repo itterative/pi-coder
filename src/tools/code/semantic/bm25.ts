@@ -1,10 +1,13 @@
+import { commentBlocksOf, type CommentBlock } from "../comment-blocks";
 import { pairKey } from "../format";
 import { declarationDoc } from "../text";
 import type { Declaration, ParsedFile } from "../types";
 
 export interface Bm25Hit {
     file: ParsedFile;
-    declaration: Declaration;
+    /** Absent when `comment` names the owner: a comment block no declaration owns. */
+    declaration?: Declaration;
+    comment?: CommentBlock;
     score: number;
 }
 
@@ -109,7 +112,8 @@ export function tokenize(text: string): string[] {
 
 interface DocEntry {
     file: ParsedFile;
-    declaration: Declaration;
+    declaration?: Declaration;
+    comment?: CommentBlock;
     key: string;
     tfName: Map<string, number>;
     tfDoc: Map<string, number>;
@@ -149,9 +153,34 @@ function entriesFor(file: ParsedFile): DocEntry[] {
             length: docTokens.length,
         };
     });
+
+    // A comment block competes on its prose alone: it has no identifier to weight three times, and inventing one from
+    // its lead sentence would let a header outrank the function whose name answers the query.
+    for (const comment of commentBlocksOf(file)) {
+        const docTokens = tokenize(comment.text);
+
+        entries.push({
+            file,
+            comment,
+            key: `${file.path}\u0000comment\u0000${comment.startIndex}`,
+            tfName: new Map(),
+            tfDoc: counts(docTokens),
+            tfSignature: new Map(),
+            length: docTokens.length,
+        });
+    }
+
     entryCache.set(file, entries);
 
     return entries;
+}
+
+function isDefinition(entry: DocEntry): boolean {
+    return entry.declaration?.isDefinition ?? false;
+}
+
+function ownerStartLine(entry: { declaration?: Declaration; comment?: CommentBlock }): number {
+    return entry.declaration?.range.startLine ?? entry.comment?.startLine ?? 0;
 }
 
 /**
@@ -167,10 +196,7 @@ function preferredEntries(files: readonly ParsedFile[]): DocEntry[] {
         for (const entry of entriesFor(file)) {
             const current = byKey.get(entry.key);
 
-            if (
-                current === undefined ||
-                (!current.declaration.isDefinition && entry.declaration.isDefinition)
-            ) {
+            if (current === undefined || (isDefinition(entry) && !isDefinition(current))) {
                 byKey.set(entry.key, entry);
             }
         }
@@ -237,7 +263,12 @@ export function rankBm25(files: readonly ParsedFile[], query: string, limit: num
         }
 
         if (score > 0) {
-            hits.push({ file: entry.file, declaration: entry.declaration, score });
+            hits.push({
+                file: entry.file,
+                declaration: entry.declaration,
+                comment: entry.comment,
+                score,
+            });
         }
     }
 
@@ -246,8 +277,10 @@ export function rankBm25(files: readonly ParsedFile[], query: string, limit: num
             (left, right) =>
                 right.score - left.score ||
                 left.file.path.localeCompare(right.file.path) ||
-                left.declaration.range.startLine - right.declaration.range.startLine ||
-                left.declaration.qualifiedName.localeCompare(right.declaration.qualifiedName),
+                ownerStartLine(left) - ownerStartLine(right) ||
+                (left.declaration?.qualifiedName ?? "").localeCompare(
+                    right.declaration?.qualifiedName ?? "",
+                ),
         )
         .slice(0, limit);
 }

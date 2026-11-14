@@ -1,4 +1,5 @@
 import {
+    bodyThenFooter,
     discoveryCapNote,
     filterNote,
     lineRange,
@@ -159,20 +160,22 @@ export async function runFlow(
 
     if (total === 0) {
         return {
-            text: [
-                header(query, label, []),
-                query.length === 0
-                    ? "# no call sites"
-                    : "# no call sites in a scope matching that query",
-                query.length === 0
-                    ? undefined
-                    : "# scope: query selects scopes by name; digest lists them",
-                '# next: outline(action="digest", path=...) lists what the file declares and what each scope is called',
-                filter ?? "",
-                discovery.truncated ? discoveryCapNote() : "",
-            ]
-                .filter((line): line is string => line !== undefined && line.length > 0)
-                .join("\n"),
+            text: bodyThenFooter(
+                [
+                    header(query, label, []),
+                    query.length === 0
+                        ? "# no call sites"
+                        : "# no call sites in a scope matching that query",
+                ],
+                [
+                    query.length === 0
+                        ? undefined
+                        : "# scope: query selects scopes by name; digest lists them",
+                    '# next: outline(action="digest", path=...) lists what the file declares and what each scope is called',
+                    filter,
+                    discovery.truncated ? discoveryCapNote() : "",
+                ],
+            ),
             files: selected.length,
             parseErrors,
             truncated: discovery.truncated,
@@ -198,9 +201,7 @@ export async function runFlow(
     const next = nextOffsetNote(fitted);
 
     return {
-        text: [fitted.text, ...notes, next]
-            .filter((part): part is string => part !== undefined && part.length > 0)
-            .join("\n"),
+        text: bodyThenFooter([fitted.text], [...notes, next]),
         files: selected.length,
         parseErrors,
         truncated: fitted.truncated || discovery.truncated,

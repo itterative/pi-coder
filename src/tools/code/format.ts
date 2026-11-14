@@ -222,6 +222,27 @@ export function indent(depth: number): string {
 }
 
 /**
+ * A page and its footer, separated by one blank line.
+ *
+ * Footer lines annotate the page — what a filter hid, where the next page starts, which channel ranked a row, which
+ * kinds are left out — and run directly under the last row they read as one more row of results. A page with no
+ * footer, or a footer with no page (a "nothing matched" answer), keeps the plain join.
+ */
+export function bodyThenFooter(
+    body: readonly string[],
+    notes: readonly (string | undefined)[],
+): string {
+    const page = body.filter((part) => part.length > 0).join("\n");
+    const footer = notes.filter((part): part is string => part !== undefined && part.length > 0);
+
+    if (page.length === 0) {
+        return footer.join("\n");
+    }
+
+    return footer.length === 0 ? page : `${page}\n\n${footer.join("\n")}`;
+}
+
+/**
  * One footer line naming what a narrowing parameter removed.
  *
  * A filtered result that only shrinks leaves the caller unable to distinguish "nothing matched" from "the filter

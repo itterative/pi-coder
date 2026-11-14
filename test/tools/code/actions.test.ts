@@ -100,7 +100,7 @@ describe("outline digest", () => {
         });
 
         expect(result.text).toContain("# digest src/net · 3 files · cpp ·");
-        expect(result.text).toContain("src/net/socket.h [tiny]");
+        expect(result.text).toContain("src/net/socket.h [26 lines]");
         expect(result.text).toContain("class Socket : public Handle");
         expect(result.text).toContain("connect(const Address& addr) const");
         expect(result.text).toContain("Socket::connect(const Address& addr) const  :9-11 [def]");

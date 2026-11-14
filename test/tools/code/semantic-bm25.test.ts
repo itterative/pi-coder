@@ -112,7 +112,7 @@ describe("outline semantic bm25", () => {
         const files = await parseFiles(FILES);
         const hits = rankBm25(files, "edit distance budget", 8);
 
-        expect(hits[0]?.declaration.qualifiedName).toBe("fuzzyLimit");
+        expect(hits[0]?.declaration?.qualifiedName).toBe("fuzzyLimit");
         expect(hits.every((hit) => hit.score > 0)).toBe(true);
     });
 
@@ -125,7 +125,31 @@ describe("outline semantic bm25", () => {
         const hits = rankBm25(files, "connect", 8);
 
         expect(hits).toHaveLength(1);
-        expect(hits[0]?.declaration.isDefinition).toBe(true);
+        expect(hits[0]?.declaration?.isDefinition).toBe(true);
+    });
+
+    it("ranks an unowned comment block on its prose alone", async () => {
+        const files = await parseFiles({
+            "src/window.ts": [
+                "/**",
+                " * The window allocator: spend a char budget on the items that carry the most context.",
+                " *",
+                " * Every candidate competes for room, and the allocator answers in one pass.",
+                " */",
+                'import { clip } from "./clip";',
+                "",
+                "export function allocate(items: string[]): string[] {",
+                "    return clip(items);",
+                "}",
+                "",
+            ].join("\n"),
+        });
+        const hits = rankBm25(files, "window allocator budget", 8);
+        const first = hits[0];
+
+        // A block has no identifier, so its lead sentence is not weighted like one; the prose has to carry it.
+        expect(first?.declaration).toBeUndefined();
+        expect(first?.comment?.lead).toContain("The window allocator");
     });
 
     it("orders equal scores deterministically by path and line", async () => {
@@ -133,10 +157,10 @@ describe("outline semantic bm25", () => {
             "src/b.ts": "export function alpha(): void {}\n",
             "src/a.ts": "export function beta(): void {}\n",
         });
-        const first = rankBm25(files, "function", 8).map((hit) => hit.declaration.name);
+        const first = rankBm25(files, "function", 8).map((hit) => hit.declaration?.name);
 
         expect(first).toEqual(
-            rankBm25(files.toReversed(), "function", 8).map((hit) => hit.declaration.name),
+            rankBm25(files.toReversed(), "function", 8).map((hit) => hit.declaration?.name),
         );
     });
 });

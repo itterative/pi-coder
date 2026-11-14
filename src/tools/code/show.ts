@@ -27,6 +27,7 @@ import {
     splitSymbolList,
     lineRange,
     pairKey,
+    bodyThenFooter,
 } from "./format";
 import { DEFAULT_CHAR_LIMIT } from "./languages";
 import { loadParsedFiles } from "./load";
@@ -92,12 +93,10 @@ export async function runShow(
                           requested,
                           await elsewhereNote(source, root, requested, signal, timing),
                       )
-                    : [
-                          `# not found: ${requested.join(", ")} in ${scope} · no files match`,
-                          filter ?? "",
-                      ]
-                          .filter((line) => line.length > 0)
-                          .join("\n"),
+                    : bodyThenFooter(
+                          [`# not found: ${requested.join(", ")} in ${scope} · no files match`],
+                          [filter],
+                      ),
             files: 0,
             parseErrors: 0,
             truncated: false,
@@ -166,22 +165,23 @@ export async function runShow(
     const notes = [...commaNotes, headingTextNote(source, headingTiers, fileOf)].filter(
         (note): note is string => note !== undefined,
     );
-    const header = [
+    const summary = [
         `# show ${scopeLabel(scope)} ${requested.join(", ")}`,
         parseErrors > 0 ? `parse: ${parseErrors} error(s)` : "",
         discovery.truncated ? "file list truncated" : "",
     ]
         .filter((part) => part.length > 0)
-        .join(" · ")
-        .concat(legend.length === 0 ? "" : `\n${legend.join("\n")}`)
-        .concat(notes.length === 0 ? "" : `\n${notes.join("\n")}`);
+        .join(" · ");
+
+    // The legend names the candidate locations the header summarises, so it stays with the page; the notes are footer.
+    const header = bodyThenFooter([summary, ...legend], notes);
     const limit = params.limit ?? DEFAULT_CHAR_LIMIT;
     const offset = Math.max(0, Math.floor(params.offset ?? 0));
     const filter = filterNote({ path: target.pattern, pathHidden: targeted.hidden });
     const ambiguous = groups.length > AMBIGUITY_LIMIT || hasMultipleDefinitionFiles(groups, fileOf);
 
     if (ambiguous) {
-        const text = renderAmbiguous(
+        const ambiguous = renderAmbiguous(
             source,
             scope,
             requested,
@@ -191,13 +191,13 @@ export async function runShow(
             offset,
             fileOf,
         );
-        const next = nextOffsetNote(text);
+        const next = nextOffsetNote(ambiguous.fitted);
 
         return {
-            text: [text.text, next, filter].filter((part) => part !== undefined).join("\n"),
+            text: bodyThenFooter([ambiguous.fitted.text], [ambiguous.note, next, filter]),
             files: files.length,
             parseErrors,
-            truncated: text.truncated,
+            truncated: ambiguous.fitted.truncated,
             matches: matches.length,
         };
     }
@@ -215,9 +215,10 @@ export async function runShow(
     const absent =
         missing.length === 0 ? undefined : `# not found: ${missing.join(", ")} in ${scope}`;
     const next = nextOffsetNote(fitted);
-    const text = [fitted.text, note, partial, ...hintNotes, absent, ...elsewhere, next, filter]
-        .filter((part) => part !== undefined)
-        .join("\n");
+    const text = bodyThenFooter(
+        [fitted.text],
+        [note, partial, ...hintNotes, absent, ...elsewhere, next, filter],
+    );
 
     return {
         text,
@@ -610,7 +611,7 @@ function renderAmbiguous(
     limit: number,
     offset: number,
     fileOf: ReadonlyMap<Declaration, ParsedFile>,
-): BudgetedText {
+): { fitted: BudgetedText; note: string } {
     const shown = groups
         .flatMap((group) => {
             const definitions = group.declarations.filter(
@@ -639,14 +640,13 @@ function renderAmbiguous(
     }
 
     const example = selectorExample(groups);
-
-    lines.push(
+    // Footer, not a row: it is advice about the whole list, so it goes under the page and not after the last match.
+    const note =
         example === undefined
             ? "# narrow with a qualified name, parameter types, or file path"
-            : `# narrow with a qualified name, parameter types, or file path, e.g. ${example}`,
-    );
+            : `# narrow with a qualified name, parameter types, or file path, e.g. ${example}`;
 
-    return renderWithinBudget(header, [lines.join("\n")], limit, offset);
+    return { fitted: renderWithinBudget(header, [lines.join("\n")], limit, offset), note };
 }
 
 /** Two definitions with the same signature in different files are separate targets, not a pair. */
@@ -782,12 +782,10 @@ function notFound(
     const next =
         '# next: outline(action="digest", path=...) to see the available declarations, or outline(action="usages", ...) for references';
 
-    return [
-        `# not found: ${requested.join(", ")} in ${scopeLabel(scope)}`,
-        ...hintNotes,
-        ...elsewhere,
-        ...(elsewhere.length === 0 ? [next] : []),
-    ].join("\n");
+    return bodyThenFooter(
+        [`# not found: ${requested.join(", ")} in ${scopeLabel(scope)}`],
+        [...hintNotes, ...elsewhere, ...(elsewhere.length === 0 ? [next] : [])],
+    );
 }
 
 /** How many locations to name per missing symbol. */

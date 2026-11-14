@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { artifactsPresent } from "./artifacts";
 import { rankBm25 } from "./bm25";
-import { chunksOf, type CodeChunk } from "./chunks";
+import { chunkKeyOf, chunksOf, type CodeChunk } from "./chunks";
 import { type SemanticMode } from "./config";
 import type { DevicePreference } from "./llamacpp";
 import { modelProfile } from "./profiles";
@@ -34,6 +34,7 @@ import {
 } from "./store";
 import { acquireIndexLock, indexLockHeld } from "./lock";
 import type { SemanticQuery, SemanticSearch } from "./types";
+import { commentBlocksOf, type CommentBlock } from "../comment-blocks";
 import { EMBED_TEXT_VERSION, embedTextOf } from "../text";
 import type { Declaration, ParsedFile } from "../types";
 
@@ -55,6 +56,8 @@ interface DeclarationEntry {
     key: string;
     text: string;
     chunk?: CodeChunk;
+    /** Set when this entry is a comment block no declaration owns rather than a head or a body chunk. */
+    comment?: CommentBlock;
 }
 
 function entriesOf(file: ParsedFile, declaration: Declaration): DeclarationEntry[] {
@@ -69,6 +72,21 @@ function entriesOf(file: ParsedFile, declaration: Declaration): DeclarationEntry
     return entries;
 }
 
+/**
+ * The vectors a file's unowned comment blocks claim: a file header, or a note between top-level statements.
+ *
+ * A block belongs to the file rather than to a declaration, which is why it travels beside `entriesOf` instead of
+ * through it. The key covers the text *and* the retrieval version, so an edited header re-embeds and a moved one does
+ * not, exactly like a body chunk.
+ */
+function commentEntriesOf(file: ParsedFile): DeclarationEntry[] {
+    return commentBlocksOf(file).map((comment) => ({
+        key: chunkKeyOf(`${EMBED_TEXT_VERSION}\u0000comment\u0000${comment.text}`),
+        text: `title: ${file.path} | text: comment ${comment.text}`,
+        comment,
+    }));
+}
+
 /** Every vector the current parse claims: the live set a prune must keep and a refresh must fill. */
 export function liveEntryKeys(files: readonly ParsedFile[]): Set<string> {
     const keys = new Set<string>();
@@ -78,6 +96,10 @@ export function liveEntryKeys(files: readonly ParsedFile[]): Set<string> {
             for (const entry of entriesOf(file, declaration)) {
                 keys.add(entry.key);
             }
+        }
+
+        for (const entry of commentEntriesOf(file)) {
+            keys.add(entry.key);
         }
     }
 
@@ -203,6 +225,7 @@ export function createSemanticSearch(deps: SemanticDeps): SemanticSearch {
             const lexical = rankBm25(request.files, request.query, TAIL_ROWS * 4).map((hit) => ({
                 file: hit.file,
                 declaration: hit.declaration,
+                comment: hit.comment,
             }));
 
             if (deps.mode !== "hybrid") {
@@ -425,7 +448,7 @@ function resolveIndex(modelDir: string, request: SemanticQuery): ResolvedIndex |
     return best ?? legacy;
 }
 
-/** Vectors a request covers (heads plus body chunks), which is what a first build would embed. */
+/** Vectors a request covers (heads, body chunks, and comment blocks), which is what a first build would embed. */
 function entryCount(request: SemanticQuery): number {
     let total = 0;
 
@@ -433,6 +456,8 @@ function entryCount(request: SemanticQuery): number {
         for (const declaration of file.all) {
             total += entriesOf(file, declaration).length;
         }
+
+        total += commentEntriesOf(file).length;
     }
 
     return total;
@@ -470,6 +495,56 @@ function initialBuild(request: SemanticQuery, live: number): DenseResult {
     };
 }
 
+/** The first line of whichever owner a candidate belongs to, for a stable ranking tie-break. */
+function ownerStartLine(candidate: { declaration?: Declaration; comment?: CommentBlock }): number {
+    return candidate.declaration?.range.startLine ?? candidate.comment?.startLine ?? 0;
+}
+
+/** One ranked owner: a declaration (its head or a body chunk) or a comment block no declaration owns. */
+interface DenseCandidate {
+    file: ParsedFile;
+    declaration?: Declaration;
+    comment?: CommentBlock;
+    entries: DeclarationEntry[];
+}
+
+/**
+ * The owners a dense ranking may return, one entry per vector.
+ *
+ * A chunk shared by two declarations (identical text) is one vector, so the second owner skips it; a comment block is
+ * its own owner, keyed by its text, because it names no declaration.
+ */
+function denseCandidates(files: readonly ParsedFile[]): DenseCandidate[] {
+    const candidates: DenseCandidate[] = [];
+    const seen = new Set<string>();
+    const claim = (entries: DeclarationEntry[]): DeclarationEntry[] =>
+        entries.filter((entry) => {
+            if (seen.has(entry.key)) {
+                return false;
+            }
+
+            seen.add(entry.key);
+
+            return true;
+        });
+
+    for (const file of files) {
+        for (const declaration of file.all) {
+            const entries = claim(entriesOf(file, declaration));
+
+            if (entries.length > 0) {
+                candidates.push({ file, declaration, entries });
+            }
+        }
+
+        for (const entry of claim(commentEntriesOf(file))) {
+            candidates.push({ file, comment: entry.comment, entries: [entry] });
+        }
+    }
+
+    return candidates;
+}
+
 async function denseRanking(
     request: SemanticQuery,
     modelDir: string,
@@ -495,33 +570,7 @@ async function denseRanking(
 
     const { dir, manifest } = resolved;
 
-    const candidates: Array<{
-        file: ParsedFile;
-        declaration: Declaration;
-        entries: DeclarationEntry[];
-    }> = [];
-    const seen = new Set<string>();
-
-    for (const file of request.files) {
-        for (const declaration of file.all) {
-            // A chunk shared by two declarations (identical text) is one vector, so the second owner skips it.
-            const entries = entriesOf(file, declaration).filter((entry) => {
-                if (seen.has(entry.key)) {
-                    return false;
-                }
-
-                seen.add(entry.key);
-
-                return true;
-            });
-
-            if (entries.length === 0) {
-                continue;
-            }
-
-            candidates.push({ file, declaration, entries });
-        }
-    }
+    const candidates = denseCandidates(request.files);
 
     const liveKeys = new Set(
         candidates.flatMap((candidate) => candidate.entries.map((entry) => entry.key)),
@@ -629,12 +678,13 @@ async function denseRanking(
             (left, right) =>
                 right.score - left.score ||
                 left.file.path.localeCompare(right.file.path) ||
-                left.declaration.range.startLine - right.declaration.range.startLine,
+                ownerStartLine(left) - ownerStartLine(right),
         )
         .slice(0, TAIL_ROWS * 4)
         .map((candidate) => ({
             file: candidate.file,
             declaration: candidate.declaration,
+            comment: candidate.comment,
             chunk: candidate.chunk,
         }));
 
@@ -766,6 +816,16 @@ function planEmbeddings(files: readonly ParsedFile[], manifest: IndexManifest): 
 
                 entries.push({ key: entry.key, text: entry.text });
             }
+        }
+
+        for (const entry of commentEntriesOf(file)) {
+            liveKeys.add(entry.key);
+
+            if (manifest.entries[entry.key] !== undefined) {
+                continue;
+            }
+
+            entries.push({ key: entry.key, text: entry.text });
         }
 
         missing += entries.length;

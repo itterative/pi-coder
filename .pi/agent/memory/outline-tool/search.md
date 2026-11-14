@@ -9,9 +9,12 @@ keep_updated: true
 # Search ranking
 
 `search` is layered, and a lower layer never displaces a higher one: exact name, name prefix, name substring,
-doc comment (all query tokens, any order), literal **body text**, then the **relevance tail** — BM25 always,
-embeddings when enabled — then fuzzy identifier matching. Tail rows carry `[related]` and a footer saying they were
-ranked, not matched; body rows carry `[body]` and are exact evidence.
+doc comment (all query tokens, any order), literal **comment text no declaration owns**, literal **body text**, then
+the **relevance tail** — BM25 always, embeddings when enabled — then fuzzy identifier matching. Tail rows carry
+`[related]` and a footer saying they were ranked, not matched; body rows carry `[body]` and comment rows say
+`comment`, both exact evidence. A comment row is **file**-granular: it quotes the matching line because `show` cannot
+return prose, and its span is what `read` wants. Doc comments are never duplicated as comment rows — they are
+already in the owning declaration's head vector — and a `kind` filter drops comment rows, which have no kind.
 
 The tool is still declaration-granular, so line-level work stays with `bash` + `rg`: regex, counts, `-C` context,
 config, logs, prose outside a parsed language, and any file `outline` does not parse.
