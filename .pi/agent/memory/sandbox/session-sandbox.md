@@ -295,6 +295,13 @@ argv), `protocol.ts`, `config.ts` (env switch + host guards), `index.ts` (wiring
   add the resolved `COPY` sources to `recipeHash` (content for small files, `size+mtime` above ~1 MB, skip
   anything a glob/`--from`/remote URL makes uncertain). Do not hash the whole context: the context dir is
   `.pi/`, 1.6 GB in this checkout.
+- **A closed session rejects everything, and that rejection must not escape.** `ContainerSession` fails every
+  pending call on close and every later call immediately (`kind: "container-exited"`), and a reload, a session
+  switch, or an image rebuild closes it while calls are still settling. pi exits on an unhandled rejection
+  (`uncaughtException` → `uncaughtCrash`), and handler failures are reported while a rejection outside a handler
+  is fatal — so a detached task awaiting a container call must absorb that failure itself. Model:
+  `src/tools/code/semantic/idle-refresh.ts`, whose runner never rejects and separates activity (disarm the timer)
+  from shutdown (disarm and abort).
 - **A rebuild replaces the container; it is never reused.** The tag is a content hash, so a rebuilt recipe is
   a different image and the running container is stale by construction. `adoptImage` marks the session stale
   and `sessionFor` closes the old container and starts the new one at the next command boundary — the

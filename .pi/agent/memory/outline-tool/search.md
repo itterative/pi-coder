@@ -201,10 +201,18 @@ search's file set is the whole namespace root (`resolved.root === request.root &
 `refreshCoversRoot`/`coversRoot` plumbing carries; a subdirectory search stays additive or it would delete the rest
 of the index.
 
-**Deferred: refreshes only run when a search reaches the dense channel.** The doc-tier gate means most queries never
-embed, so a high-churn tree (memories rewritten outside git) can drift indefinitely without a refresh. A sweep that
-does not need a search — at session start, or on idle — would keep such an index warm; it would have to respect the
-build lock and the refresh worker cap like any other background build.
+**The session-start/idle sweep exists now** (`src/tools/code/index.ts` `backgroundRefresh` + `semantic/idle-refresh.ts`).
+It scans every indexed root of this project in the session's source kind at session start and five minutes after
+`agent_settled`, and rebuilds only when the drift is under `IDLE_REFRESH_LIMIT` (2,000 declarations, CPU,
+`refreshConcurrency()`); above it, it says so and names `/outline build`. It never prompts or downloads, so it does
+nothing unless the mode is already `hybrid` and the artifacts are present. Lifecycle is the landmine: the pass is
+single-flight, activity only disarms the timer (aborting mid-build throws away shards already written), and
+`session_shutdown` **aborts** it, because the container or bwrap view it reads is being reaped. The runner must
+never reject — see the container invariant in `sandbox/session-sandbox.md` — and the mode/artifact gates belong
+inside the pass so a gated bail cannot clear a foreground `/outline build` status.
+
+**Drift still only counts when the dense channel is reached.** The doc-tier gate means most queries never embed, so
+outside the idle sweep a high-churn tree (memories rewritten outside git) drifts until the next idle pass.
 
 **Dead keys compact themselves now** (2026-11-11). Growth is per edit, not per query: a refresh embeds only keys
 the manifest lacks (`planEmbeddings` skips present ones), and it appends a shard per touched file while the old

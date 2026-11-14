@@ -178,6 +178,54 @@ describe("idle refresh decision", () => {
 
         expect(outcome.overBudget).toBe(true);
     });
+
+    it("stops between roots when the caller aborts, instead of opening the next one", async () => {
+        // A shutdown aborts the pass because the session's filesystem is going away: each remaining root would only
+        // reach a closed container, and the scan of a root already in flight is the scan's own to interrupt.
+        const controller = new AbortController();
+        const scanned: string[] = [];
+        const running = refreshOnce({
+            roots: [root, { dir: "/index/two", root: `${ROOT}/sub` }],
+            scan: async (indexed) => {
+                scanned.push(indexed.root);
+                controller.abort();
+
+                return { root: indexed.root, changed: 1, files: [], missing: 1 };
+            },
+            build: async () => 0,
+            signal: controller.signal,
+        });
+
+        await expect(running).rejects.toMatchObject({ name: "AbortError" });
+        expect(scanned).toEqual([ROOT]);
+    });
+
+    it("stops before building once the caller aborts", async () => {
+        const controller = new AbortController();
+        let built = 0;
+        const running = refreshOnce({
+            roots: [root],
+            scan: async () => {
+                controller.abort();
+
+                return {
+                    root: ROOT,
+                    changed: 1,
+                    files: [{ path: `${ROOT}/src/two.ts` } as ParsedFile],
+                    missing: 1,
+                };
+            },
+            build: async () => {
+                built += 1;
+
+                return 1;
+            },
+            signal: controller.signal,
+        });
+
+        await expect(running).rejects.toMatchObject({ name: "AbortError" });
+        expect(built).toBe(0);
+    });
 });
 
 describe("idle refresh scan", () => {

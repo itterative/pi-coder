@@ -94,17 +94,23 @@ export interface RefreshOutcome {
  * Kept apart from the timer and the UI so the policy is testable: a pass under `IDLE_REFRESH_LIMIT` rebuilds each
  * root from the files the scan found changed, and above it the pass reports instead of spending minutes of CPU on a
  * refactor nobody asked it to chase.
+ *
+ * The signal is checked between roots, so a stopped pass does not open the next root; the scan and build it calls
+ * are each responsible for checking the same signal inside their own loops.
  */
 export async function refreshOnce(deps: {
     roots: readonly IndexedRoot[];
     scan: (root: IndexedRoot) => Promise<ScanFinding | undefined>;
     build: (root: IndexedRoot, files: ParsedFile[]) => Promise<number>;
     budget?: number;
+    signal?: AbortSignal;
 }): Promise<RefreshOutcome> {
     const findings: Array<{ root: IndexedRoot; finding: ScanFinding }> = [];
     let missing = 0;
 
     for (const root of deps.roots) {
+        deps.signal?.throwIfAborted();
+
         const finding = await deps.scan(root);
 
         if (finding === undefined || finding.missing === 0) {
@@ -125,6 +131,8 @@ export async function refreshOnce(deps: {
     let embedded = 0;
 
     for (const { root, finding } of findings) {
+        deps.signal?.throwIfAborted();
+
         if (finding.files.length === 0) {
             continue;
         }

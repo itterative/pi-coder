@@ -33,6 +33,7 @@ import {
     ensureIndexMetadata,
     takeEmbedNotice,
 } from "./semantic";
+import { idleRefresh } from "./semantic/idle-refresh";
 import { projectRoots, refreshOnce, scanRoot } from "./semantic/refresh";
 import { buildConcurrency, refreshConcurrency } from "./semantic/runtime";
 import {
@@ -47,7 +48,7 @@ import { modelProfile, PROFILES } from "./semantic/profiles";
 import { readManifest } from "./semantic/store";
 import type { SemanticSearch } from "./semantic/types";
 import { runShow } from "./show";
-import { createCodeSource, type CodeReadRoots } from "./source";
+import { createCodeSource, type CodeReadRoots, type CodeSource } from "./source";
 import { CallTiming } from "./timing";
 import {
     DECLARATION_KINDS,
@@ -215,8 +216,19 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
     });
 
     // An idle refresh, so drift is caught while nothing waits on it: at session start (immediately, so the first
-    // search of the session is warm) and five minutes after the agent settles. Activity cancels the armed timer.
-    const refresh = idleRefresh((ctx) => createCodeSource(ctx, container, codeReadRoots));
+    // search of the session is warm) and five minutes after the agent settles. Activity disarms the armed timer;
+    // shutdown also aborts a pass already running, because the session's container is reaped underneath it.
+    const sourceFor = (ctx: ExtensionContext): Promise<CodeSource> =>
+        createCodeSource(ctx, container, codeReadRoots);
+    const refresh = idleRefresh({
+        pass: (ctx, signal) => backgroundRefresh(ctx, signal, sourceFor),
+        onFailure: (ctx, error) => {
+            ctx.ui.notify(
+                `outline semantic: background refresh stopped (${messageOf(error)})`,
+                "warning",
+            );
+        },
+    });
 
     pi.on("session_start", (_event, ctx) => {
         void refresh.run(ctx);
@@ -231,7 +243,7 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
         refresh.cancel();
     });
     pi.on("session_shutdown", () => {
-        refresh.cancel();
+        refresh.stop();
     });
 
     pi.registerCommand("outline", {
@@ -243,112 +255,83 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
 }
 
 /**
- * Background refresh driven by the session rather than by a search.
+ * One idle semantic pass, driven by the session rather than by a search.
  *
- * A search only notices drift under the path it happened to look at, and only when it was asked — so a refactor could
- * leave the index stale for a whole session. This arms a scan when the agent goes idle and runs one at session start.
+ * A search only notices drift under the path it happened to look at, and only when it was asked — so a refactor
+ * could leave the index stale for a whole session. The runner in `semantic/idle-refresh.ts` calls this at session
+ * start and when the agent goes idle.
  *
  * It never prompts, never downloads, and never runs when the mode is not `hybrid`: the consent dialog belongs to a
- * turn, and an idle timer must not spend bandwidth. One scan at a time, and a build that is already running (from a
- * search) simply means there is nothing for this to do.
+ * turn, and an idle timer must not spend bandwidth. The gates live here rather than in the runner because a pass
+ * that bails on one of them must announce and clear nothing — the status entry may belong to a foreground
+ * `/outline build` at that moment.
  */
-function idleRefresh(
-    sourceFor: (ctx: ExtensionContext) => Promise<Awaited<ReturnType<typeof createCodeSource>>>,
-): { run(ctx: ExtensionContext): Promise<void>; arm(ctx: ExtensionContext): void; cancel(): void } {
-    let timer: NodeJS.Timeout | undefined;
-    let running = false;
-    let latest: ExtensionContext | undefined;
+async function backgroundRefresh(
+    ctx: ExtensionContext,
+    signal: AbortSignal,
+    sourceFor: (ctx: ExtensionContext) => Promise<CodeSource>,
+): Promise<void> {
+    const root = semanticRoot();
 
-    const cancel = (): void => {
-        if (timer !== undefined) {
-            clearTimeout(timer);
-            timer = undefined;
-        }
-    };
+    if (effectiveSemanticMode(process.env, readConsent(root)).mode !== "hybrid") {
+        return;
+    }
 
-    const run = async (ctx: ExtensionContext): Promise<void> => {
-        if (running) {
+    if (!artifactsPresent(root)) {
+        return;
+    }
+
+    const source = await sourceFor(ctx);
+    let announced = false;
+
+    try {
+        const outcome = await refreshOnce({
+            signal,
+            roots: projectRoots({ modelDir: root, cwd: ctx.cwd, sourceKind: source.kind }),
+            scan: (indexed) => scanRoot({ source, root: indexed.root, modelDir: root, signal }),
+            build: async (indexed, files) => {
+                if (!announced) {
+                    announced = true;
+                    ctx.ui.setStatus(OUTLINE_STATUS_KEY, "outline: refreshing in the background");
+                }
+
+                const built = await buildIndex({
+                    sourceKind: source.kind,
+                    root: indexed.root,
+                    modelDir: root,
+                    files,
+                    signal,
+                    // Only the changed files were parsed: pruning against them would delete the rest of the index.
+                    prune: false,
+                    maxConcurrency: refreshConcurrency(),
+                }).catch(() => ({ embedded: 0 }));
+
+                return built.embedded;
+            },
+        });
+
+        if (outcome.overBudget) {
+            ctx.ui.notify(
+                `outline semantic: ${outcome.missing} vector${outcome.missing === 1 ? "" : "s"} not indexed; /outline build <path>`,
+                "info",
+            );
+
             return;
         }
 
-        latest = ctx;
-        const root = semanticRoot();
-
-        if (effectiveSemanticMode(process.env, readConsent(root)).mode !== "hybrid") {
-            return;
+        if (outcome.rebuilt > 0) {
+            ctx.ui.notify(
+                `outline semantic: refreshed ${outcome.embedded} vector${outcome.embedded === 1 ? "" : "s"} in the background`,
+                "info",
+            );
         }
-
-        if (!artifactsPresent(root)) {
-            return;
-        }
-
-        running = true;
-
-        try {
-            const source = await sourceFor(ctx);
-            let announced = false;
-            const outcome = await refreshOnce({
-                roots: projectRoots({ modelDir: root, cwd: ctx.cwd, sourceKind: source.kind }),
-                scan: (indexed) => scanRoot({ source, root: indexed.root, modelDir: root }),
-                build: async (indexed, files) => {
-                    if (!announced) {
-                        announced = true;
-                        ctx.ui.setStatus(
-                            OUTLINE_STATUS_KEY,
-                            "outline: refreshing in the background",
-                        );
-                    }
-
-                    const built = await buildIndex({
-                        sourceKind: source.kind,
-                        root: indexed.root,
-                        modelDir: root,
-                        files,
-                        // Only the changed files were parsed: pruning against them would delete the rest of the index.
-                        prune: false,
-                        maxConcurrency: refreshConcurrency(),
-                    }).catch(() => ({ embedded: 0 }));
-
-                    return built.embedded;
-                },
-            });
-
-            if (outcome.overBudget) {
-                ctx.ui.notify(
-                    `outline semantic: ${outcome.missing} vector${outcome.missing === 1 ? "" : "s"} not indexed; /outline build <path>`,
-                    "info",
-                );
-
-                return;
-            }
-
-            if (outcome.rebuilt > 0) {
-                ctx.ui.notify(
-                    `outline semantic: refreshed ${outcome.embedded} vector${outcome.embedded === 1 ? "" : "s"} in the background`,
-                    "info",
-                );
-            }
-        } finally {
-            running = false;
+    } finally {
+        // Only a pass that set the status may clear it; an abort still lands here, and a rejection from a UI that
+        // outlived its session is the runner's to absorb, not this pass's to report.
+        if (announced) {
             ctx.ui.setStatus(OUTLINE_STATUS_KEY, undefined);
         }
-    };
-
-    const arm = (ctx: ExtensionContext): void => {
-        cancel();
-        latest = ctx;
-        timer = setTimeout(() => {
-            timer = undefined;
-
-            if (latest !== undefined) {
-                void run(latest);
-            }
-        }, IDLE_REFRESH_DELAY_MS);
-        // A pending refresh must not keep pi alive after the last turn.
-        timer.unref?.();
-    };
-
-    return { run, arm, cancel };
+    }
 }
 
 async function dispatchAction(
@@ -517,9 +500,6 @@ const SEMANTIC_MEGABYTES = Math.round(artifactBytes() / 1_048_576);
 const SEMANTIC_HINT = `# semantic: /outline on downloads a ~${SEMANTIC_MEGABYTES} MB model once and ranks by meaning`;
 /** Footer status entry shared by background downloads and refreshes; one line, cleared when idle. */
 const OUTLINE_STATUS_KEY = "outline";
-
-/** How long the session may sit idle before an automatic scan; long enough not to race a follow-up question. */
-const IDLE_REFRESH_DELAY_MS = 5 * 60_000;
 
 /** One consent prompt per session at most: "not now" is per session, "never" persists. */
 let askedThisSession = false;
