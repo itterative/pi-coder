@@ -52,6 +52,8 @@ One bounded text-only call over `serializeConversationMinimal(span)` + stage 1's
 `<previous-summary>` **only when stage 1 did not run** (stage 1's instruction already carries it forward, so
 feeding both invites a union of duplicates). Transcript-first on disagreement, checkpoint fills what compression
 removed, and the output must be no longer than the checkpoint it was given — merge and drop, never concatenate.
+The cap is 32,000 tokens (2026-11-14): at 12,000 a healthy span used ~98% of it and lost its oldest blocks, which
+are the ones the checkpoint compressed hardest and the ones "prefer the transcript" cannot recover.
 
 `overflow` **attempts** stage 1: it used to be skipped outright, on the reasoning that the live context provably
 does not fit — true of the live context, false of a shorter prefix of it, which is what the cut walk looks for.
@@ -59,9 +61,16 @@ does not fit — true of the live context, false of a shorter prefix of it, whic
 ## Summary and details contract
 
 `summary` = model text + `buildSupplementarySections()` (`## Verbatim Recent Requests`, `## Delegated Runs`,
-`## Context Fold`, all computed by `analyzeSpan` rather than recalled) + pi's
+`## Context Fold`, computed by `analyzeSpan` rather than recalled) + pi's
 `<read-files>`/`<modified-files>` tail. The model is told to write pi's section skeleton **only** and to skip the
 harness-owned ones, so `CompactionSummaryMessageComponent` and the `/agents` transcript keep rendering.
+
+`## Context Fold` is the only place that tells a fresh reader what the **retained tail** is, and it must stay
+deterministic: neither the reduce nor the summarizer ever saw those turns, so a model-written sentence cannot be
+trusted to say they are pre-compaction history. Its line states the count, any dropped blocks, then that the
+messages following the checkpoint were kept verbatim from before this compaction — newer than everything
+summarized, older than the current turn, not summarized — and resume at `firstKeptEntryId`. Without that last
+line the turns read as the checkpoint's continuation, which is what the reader sees positionally.
 
 `details` = `{ version: 1, route, provider, model, readFiles, modifiedFiles, summarizedMessages, droppedBlocks }`.
 `route` is `"two-stage" | "native" | "serialized"` (renamed from `strategy` when stages arrived; core reads only

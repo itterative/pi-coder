@@ -9,5 +9,6 @@
 - recover later ids with agent(action="list")
 
 ## Context Fold
-- 8 messages were folded into this checkpoint; the conversation continues at entry kept-9.
+- 8 messages were folded into this checkpoint.
 - 3 older message blocks were omitted from the summarization input, so this checkpoint may not reflect them.
+- The messages that follow were kept verbatim from before this compaction: newer than everything summarized here, older than the current turn, and not summarized themselves. The conversation resumes at entry kept-9.

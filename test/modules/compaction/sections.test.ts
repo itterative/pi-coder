@@ -76,6 +76,20 @@ describe("deterministic summary sections", () => {
         expect(sections).toContain("2 older message blocks were omitted");
     });
 
+    it("tells the reader the retained turns predate the compaction", () => {
+        // The reader meets these turns immediately after the checkpoint, so without this line they read as its
+        // continuation. The model cannot write it: those turns were never in its span.
+        const sections = buildSupplementarySections({
+            analysis: analyzeSpan([userMessage("only a request")]),
+            firstKeptEntryId: "kept-1",
+            droppedBlocks: 0,
+        });
+
+        expect(sections).toContain("kept verbatim from before this compaction");
+        expect(sections).toContain("older than the current turn");
+        expect(sections).toContain("resumes at entry kept-1");
+    });
+
     it("ignores non-agent tool calls when collecting runs", () => {
         const analysis = analyzeSpan([call("x1", "read", { path: "a" })]);
         expect(analysis.agentCalls).toEqual([]);

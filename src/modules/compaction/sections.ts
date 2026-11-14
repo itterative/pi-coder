@@ -148,18 +148,23 @@ export interface SupplementarySectionInput {
 }
 
 export function buildSupplementarySections(input: SupplementarySectionInput): string {
-    const folded =
-        `## Context Fold\n- ${String(input.analysis.messageCount)} messages were folded ` +
-        `into this checkpoint; the conversation continues at entry ${input.firstKeptEntryId}.`;
+    const folded = `## Context Fold\n- ${String(input.analysis.messageCount)} messages were folded into this checkpoint.`;
     const omitted =
         input.droppedBlocks > 0
             ? `\n- ${String(input.droppedBlocks)} older message blocks were omitted from the summarization ` +
               "input, so this checkpoint may not reflect them."
             : "";
+    // Neither the model that wrote this checkpoint nor the reader of it saw the retained turns, and the reader
+    // sees them immediately after the summary. Their provenance has to be stated deterministically, or the
+    // turns read as the continuation of the summary rather than as history that predates it.
+    const retained =
+        "\n- The messages that follow were kept verbatim from before this compaction: newer than everything " +
+        "summarized here, older than the current turn, and not summarized themselves. The conversation " +
+        `resumes at entry ${input.firstKeptEntryId}.`;
     const sections = [
         verbatimRequests(input.analysis),
         delegatedRuns(input.analysis),
-        `${folded}${omitted}`,
+        `${folded}${omitted}${retained}`,
     ];
     return sections.filter((section) => section.length > 0).join("\n\n");
 }

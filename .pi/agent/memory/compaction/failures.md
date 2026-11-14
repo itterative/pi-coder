@@ -119,8 +119,11 @@ The transcript cap (then an in-code `maxChars`, now `serializedMaxTokens` plus t
 `serializeConversationMinimal` drop **702 message blocks** on that same run, so the persisted summary covered a truncated
 view — and because stage 1 failed, the capped reduce was the *only* real input. These are independent knobs: fixing
 stage 1 does not raise the cap, and raising the cap does not fix stage 1. Watch `blocks-dropped` and
-`degenerate-native-output` separately in `npm run compaction-report -- --suspect`. The cap should be derived from the
-window rather than from a chars/4 estimate this crude (`pipeline.md`, serializer).
+`degenerate-native-output` separately in `npm run compaction-report -- --suspect`. The default ceiling is now **32,000**
+(2026-11-14): at 12,000 a healthy span used ~98% of the budget and lost its oldest 28 blocks, exactly the part the
+`<segment-checkpoint>` had compressed hardest, and the reduce is told to prefer the transcript where the two disagree.
+A drop now only means the span serialized past 32k. The remaining open part is deriving the ceiling from the window
+rather than from a chars/4 estimate this crude (`pipeline.md`, serializer).
 
 ## A missing cut point (gap 8, CLOSED 2026-09-06)
 

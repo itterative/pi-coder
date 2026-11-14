@@ -15,7 +15,11 @@ export interface CompactionConfig {
     enabled: boolean;
     /** Include assistant thinking in the serialized fallback. It is the heaviest block and rarely carries decisions the visible text does not. */
     keepThinking: boolean;
-    /** Ceiling for the serialized fallback request, in estimated tokens. Oldest messages are dropped first. */
+    /**
+     * Ceiling for the serialized fallback request, in estimated tokens. Oldest messages are dropped first.
+     * Above a normal span's serialized size, so the reduce sees it whole; 12k silently trimmed the oldest
+     * blocks of most real spans, which is the one part of the transcript the checkpoint had compressed hardest.
+     */
     serializedMaxTokens: number;
     /** Characters kept per assistant text block in the serialized fallback. */
     serializedAssistantChars: number;
@@ -65,7 +69,7 @@ export interface CompactionConfig {
 export const DEFAULT_COMPACTION_CONFIG: CompactionConfig = {
     enabled: true,
     keepThinking: false,
-    serializedMaxTokens: 12_000,
+    serializedMaxTokens: 32_000,
     serializedAssistantChars: 1_200,
     serializedUserChars: 2_000,
     serializedToolResultChars: 400,
