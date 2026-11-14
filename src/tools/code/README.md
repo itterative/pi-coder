@@ -425,14 +425,16 @@ costs what `usages` costs, and imports are cached per `ParsedFile` so an edited 
   asking what is in this file; if nothing visible remains, the line replaces `# no declarations` with the reason. A
   directory digest leaves it out, since it would repeat per file. A result that shows no members at all (the
   directory map) carries no such note, because the filter cost it nothing.
-- **The directory map names files, within its budget.** A map of directory counts answers "where is the code" but
-  not "which file", which is what a caller who named one directory usually asked. Names are added per row while the
-  budget allows — the root's own files first, since they sit in no subdirectory, then each directory in size order
-  — under the summary line (`.  15 files` / `  ask-user.ts list-view.ts …`). A list that had to stop says so
-  (`# … 4 more`). `# deeper: outline digest <dir>` names the largest directory to open next; it is deliberately not
-  `# next:`, which is the truncation marker, and a complete map must not read as a shortened one. The header says
-  why the map replaced the declarations (`declarations exceed the N-char limit; showing the file list`) rather than
-  claiming the returned text was over limit.
+- **The directory map is a tree with a fair budget.** A map of directory counts answers "where is the code" but
+  not "which file", which is what a caller who named one directory usually asked. Every directory therefore gets a
+  summary line and its immediate child directories as rows (`models/ 15`, `debug/ 14`) instead of flattening their
+  files into longer paths; files sitting directly in a directory follow, sorted by declaration count so the ones
+  worth opening come first (`call_list.hpp (150)`). Names are spent one packed line per directory per sweep, so a
+  173-file directory cannot exhaust the budget before a 10-file one has been named; a list that had to stop says
+  `# … N more`, and `(0)` is omitted because a file with no declarations is still a file. The footer names the shape
+  (`# names: file (declarations) · dir/ files`), and `# deeper:` offers the three largest directories to open next.
+  It is deliberately not `# next:`, the truncation marker, so a complete map never reads as shortened. The header
+  says why the map replaced the declarations (`declarations exceed the N-char limit; showing the map`).
 - **Paging.** A cut result ends with `# next: offset=N` *and* how many body lines remain, because the step between
   pages is set by the character budget rather than a line count: `# next: offset=19 · 111 of 130 line(s) left · raise
   limit to fit more per call`. When a page stops inside a block, `# omitted N more block(s) after this body` names the

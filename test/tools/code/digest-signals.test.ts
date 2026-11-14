@@ -153,3 +153,68 @@ describe("outline digest kind-filtered rows", () => {
         expect(members.text).toContain("Ops::");
     });
 });
+
+describe("outline digest directory map layout", () => {
+    function declarations(prefix: string, count: number): string {
+        return Array.from(
+            { length: count },
+            (_, index) => `export function ${prefix}${index}(): number {\n    return ${index};\n}`,
+        ).join("\n\n");
+    }
+
+    function source(): MemoryCodeSource {
+        const files: Record<string, string> = {
+            "src/big/empty.ts": 'import "./nothing";\n',
+            "src/big/nested/deep.ts": declarations("deep", 1),
+            "src/small/only.ts": declarations("only", 1),
+            "src/third/x.ts": declarations("x", 1),
+        };
+
+        for (let index = 0; index < 12; index += 1) {
+            files[`src/big/file-${index}-with-a-long-name.ts`] = declarations(`file${index}`, 1);
+        }
+
+        files["src/big/heavy.ts"] = declarations("heavy", 20);
+
+        return new MemoryCodeSource("/project", files);
+    }
+
+    it("names a small directory before a large one takes a second line", async () => {
+        const result = await runDigest(source(), { action: "digest", path: "src", limit: 560 });
+
+        // Greedy size order spent the whole budget on `big/`; one line per directory per sweep is the fix.
+        expect(result.text).toContain("only.ts");
+        expect(result.text).toContain("x.ts");
+        expect(result.text).toContain("# …");
+    });
+
+    it("shows a child directory as its own row instead of a longer file path", async () => {
+        const result = await runDigest(source(), { action: "digest", path: "src", limit: 1200 });
+
+        expect(result.text).toContain("nested/ 1");
+        expect(result.text).not.toContain("nested/deep.ts");
+    });
+
+    it("puts the file with the most declarations first", async () => {
+        const result = await runDigest(source(), { action: "digest", path: "src", limit: 1200 });
+
+        expect(result.text.indexOf("heavy.ts (20)")).toBeLessThan(
+            result.text.indexOf("file-0-with-a-long-name.ts"),
+        );
+    });
+
+    it("drops the count for a file that declares nothing", async () => {
+        const result = await runDigest(source(), { action: "digest", path: "src", limit: 1200 });
+
+        expect(result.text).toContain("empty.ts");
+        expect(result.text).not.toContain("empty.ts (0)");
+    });
+
+    it("suggests the three largest directories to descend into", async () => {
+        const result = await runDigest(source(), { action: "digest", path: "src", limit: 1200 });
+
+        expect(result.text).toMatch(
+            /# deeper: outline digest src\/big · outline digest src\/small · outline digest src\/third$/m,
+        );
+    });
+});

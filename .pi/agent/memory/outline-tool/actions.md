@@ -91,7 +91,11 @@ whose split parts all miss but whose text names a heading is used whole (announc
   related ones (`# also: …`).
 - **A file with no declarations is not empty.** `digest` counts its top-level call sites and names `flow` instead of
   saying `# no declarations`. The directory-map fallback says *why* it replaced the declarations and uses
-  `# deeper:` (not `# next:`) for its descend hint, so a complete map never reads as a truncated one.
+  `# deeper:` (not `# next:`) for its descend hint, so a complete map never reads as a truncated one. The map is a
+  tree with a fair budget: each directory shows its immediate child directories as rows instead of flattening their
+  files into longer paths, its direct files sorted by declaration count (zero omitted), and names are spent one packed
+  line per directory per sweep — greedy size order left every later directory anonymous. `# deeper:` names the three
+  largest directories, and the footer legend separates `file (declarations)` from `dir/ files`.
 
 ## Cuts
 

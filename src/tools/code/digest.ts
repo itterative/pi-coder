@@ -578,6 +578,15 @@ function digestFooter(
     return notes.join("\n");
 }
 
+/** Child directories named on a directory's structure line before the rest are counted. */
+const MAX_CHILD_DIRS = 12;
+
+/** Room reserved per named directory for its `# … N more` note, so a note never falls off a full page. */
+const NAME_NOTE_RESERVE = 24;
+
+/** Files a flat map names before summarising the rest; one name per line, as it always was. */
+const FLAT_MAP_NAMES = 80;
+
 function renderDirectoryMap(
     source: CodeSource,
     root: string,
@@ -585,11 +594,8 @@ function renderDirectoryMap(
     limit: number,
     scope: string,
 ): string | undefined {
-    const directories = new Map<
-        string,
-        { count: number; languages: Set<string>; names: string[] }
-    >();
-    const rootNames: string[] = [];
+    const directories = new Map<string, MapDirectory>();
+    const rootFiles: MapFile[] = [];
 
     for (const file of parsed) {
         const relative = path.relative(root, file.path);
@@ -599,12 +605,13 @@ function renderDirectoryMap(
         }
 
         const parts = relative.split(path.sep);
-        // A count is what makes the list answer "where is the code" and "which of these is worth opening": the
-        // fallback used to be names only, so the follow-up call was a guess between fourteen equally blank files.
-        const name = `${parts.at(-1) ?? relative} (${file.all.length})`;
+        const entry: MapFile = {
+            label: parts.at(-1) ?? relative,
+            declarations: file.all.length,
+        };
 
         if (parts.length === 1) {
-            rootNames.push(name);
+            rootFiles.push(entry);
 
             continue;
         }
@@ -615,96 +622,210 @@ function renderDirectoryMap(
             continue;
         }
 
-        const entry = directories.get(directory) ?? {
-            count: 0,
+        const dir = directories.get(directory) ?? {
+            name: directory,
+            files: 0,
             languages: new Set<string>(),
-            names: [],
+            direct: [],
+            children: new Map<string, number>(),
         };
 
-        entry.count += 1;
-        entry.names.push(`${parts.slice(1, -1).concat(name).join("/")}`);
-        entry.languages.add(file.language);
-        directories.set(directory, entry);
+        dir.files += 1;
+        dir.languages.add(file.language);
+
+        if (parts.length === 2) {
+            dir.direct.push(entry);
+        } else {
+            const child = parts[1] ?? "";
+            dir.children.set(child, (dir.children.get(child) ?? 0) + 1);
+        }
+
+        directories.set(directory, dir);
     }
 
     const displayRoot = source.displayPath(root);
-    const header = `# digest ${scopeLabel(scope)} · ${counted(parsed.length, "file")} · declarations exceed the ${limit}-char limit; showing the file list with declaration counts`;
+    const header = `# digest ${scopeLabel(scope)} · ${counted(parsed.length, "file")} · declarations exceed the ${limit}-char limit; showing the map with declaration counts`;
 
     if (directories.size === 0) {
-        const names = parsed
-            .map((file) => `${path.basename(file.path)} (${file.all.length})`)
-            .toSorted();
-        const shownNames = names.slice(0, 80);
-        const lines = [header, ...shownNames.map((name) => `  ${name}`)];
-
-        if (names.length > shownNames.length) {
-            lines.push(`  # … ${names.length - shownNames.length} more file(s)`);
-        }
-
-        return lines.join("\n");
+        return renderFlatMap(header, rootFiles);
     }
 
-    const sorted = Array.from(directories.entries()).toSorted(
-        (left, right) => right[1].count - left[1].count || left[0].localeCompare(right[0]),
+    const sortedDirs = [...directories.values()].toSorted(
+        (left, right) => right.files - left.files || left.name.localeCompare(right.name),
     );
-    const lines = [header];
-    const largest = sorted[0]?.[0];
-    // Not `# next:`: that marker means "this result was cut, continue it". This is a suggestion, and reusing the
-    // truncation marker for it made a complete map read as a shortened one.
-    const deeper =
-        largest === undefined
-            ? undefined
-            : `# deeper: outline digest ${joinDisplay(displayRoot, largest)}`;
-
-    // A map of directory names answers "where is the code" but not "which file", and a caller who asked for
-    // `src/tui` is usually after one of the fifteen files sitting right there. So names are added while the budget
-    // allows, most informative first: the root's own files (no subdirectory to find them in), then each directory in
-    // size order. A truncated list says how many it left out, and the elided directories are one `digest` away.
-    let remaining = limit - lines[0].length - (deeper === undefined ? 1 : deeper.length + 2);
-
-    const addNames = (names: readonly string[]): void => {
-        let shown = 0;
-
-        for (const line of nameLines(names)) {
-            if (line.text.length + 1 > remaining) {
-                break;
-            }
-
-            lines.push(line.text);
-            remaining -= line.text.length + 1;
-            shown += line.count;
-        }
-
-        const more = `  # … ${names.length - shown} more`;
-
-        if (shown < names.length && more.length + 1 <= remaining) {
-            lines.push(more);
-            remaining -= more.length + 1;
-        }
+    const deeper = sortedDirs
+        .slice(0, 3)
+        .map((dir) => `outline digest ${joinDisplay(displayRoot, dir.name)}`);
+    const notes = [
+        "# names: file (declarations) · dir/ files",
+        deeper.length === 0 ? "" : `# deeper: ${deeper.join(" · ")}`,
+    ].filter((line) => line.length > 0);
+    const namedDirs =
+        sortedDirs.filter((dir) => dir.direct.length > 0).length + (rootFiles.length > 0 ? 1 : 0);
+    const budget = {
+        remaining:
+            limit -
+            header.length -
+            notes.reduce((sum, line) => sum + line.length + 1, 0) -
+            NAME_NOTE_RESERVE * Math.min(namedDirs, 20),
     };
 
-    if (rootNames.length > 0) {
-        const summary = `.  ${counted(rootNames.length, "file")}`;
+    // Structure first: every directory gets its summary and its child directories, so none is a bare count. Then
+    // names are spread one packed line at a time across directories, so a 173-file directory cannot spend a 4000-char
+    // budget before the 10-file one has been named. Size order alone used to leave every later directory anonymous.
+    const blocks = sortedDirs.map((dir) => directoryBlock(dir));
 
-        lines.push(summary);
-        remaining -= summary.length + 1;
-        addNames(rootNames.toSorted());
+    for (const block of blocks) {
+        for (const line of block) {
+            budget.remaining -= line.length + 1;
+        }
     }
 
-    for (const [directory, entry] of sorted) {
-        const languages = Array.from(entry.languages).toSorted().join(",");
-        const summary = `${directory}/  ${counted(entry.count, "file")}  ${languages}`;
+    const rootSorted = rootFiles.toSorted(compareMapFiles);
+    const rootShown = emitNameLines(nameLines(rootSorted.map(mapFileLabel)), budget);
+    const packed = sortedDirs.map((dir) =>
+        nameLines(dir.direct.toSorted(compareMapFiles).map(mapFileLabel)),
+    );
+    const shown = packed.map<NameLine[]>(() => []);
+    const next = packed.map(() => 0);
+    let progress = true;
 
-        lines.push(summary);
-        remaining -= summary.length + 1;
-        addNames(entry.names.toSorted());
+    while (progress) {
+        progress = false;
+
+        for (let index = 0; index < packed.length; index += 1) {
+            const pool = packed[index] ?? [];
+            const position = next[index] ?? 0;
+            const line = pool[position];
+
+            if (line === undefined || line.text.length + 1 > budget.remaining) {
+                continue;
+            }
+
+            budget.remaining -= line.text.length + 1;
+            shown[index]?.push(line);
+            next[index] = position + 1;
+            progress = true;
+        }
     }
 
-    if (deeper !== undefined) {
-        lines.push(deeper);
+    const lines = [header];
+
+    if (rootFiles.length > 0) {
+        lines.push(
+            `.  ${counted(rootFiles.length, "file")}`,
+            ...rootShown.map((line) => line.text),
+        );
+        appendMoreNote(lines, rootSorted.length, rootShown);
+    }
+
+    sortedDirs.forEach((dir, index) => {
+        lines.push(...(blocks[index] ?? []), ...(shown[index] ?? []).map((line) => line.text));
+        appendMoreNote(lines, dir.direct.length, shown[index] ?? []);
+    });
+
+    lines.push(...notes);
+
+    return lines.join("\n");
+}
+
+/** What a block could not name, said where its names stopped. */
+function appendMoreNote(lines: string[], total: number, shown: readonly NameLine[]): void {
+    const named = shown.reduce((sum, line) => sum + line.count, 0);
+
+    // A list that never started is not a partial list: `tui/ 31 files` already says the names were dropped.
+    if (named === 0 || named >= total) {
+        return;
+    }
+
+    lines.push(`  # … ${total - named} more`);
+}
+
+/** Fill one bucket from its packed lines, stopping at the budget. */
+function emitNameLines(packed: readonly NameLine[], budget: { remaining: number }): NameLine[] {
+    const emitted: NameLine[] = [];
+
+    for (const line of packed) {
+        if (line.text.length + 1 > budget.remaining) {
+            break;
+        }
+
+        budget.remaining -= line.text.length + 1;
+        emitted.push(line);
+    }
+
+    return emitted;
+}
+
+/** A directory with no subdirectories: one name per line, the shape the map has always had. */
+function renderFlatMap(header: string, files: readonly MapFile[]): string {
+    const names = files.toSorted(compareMapFiles).map(mapFileLabel);
+
+    if (names.length === 0) {
+        return header;
+    }
+
+    const shown = names.slice(0, FLAT_MAP_NAMES);
+    const lines = [header, ...shown.map((name) => `  ${name}`)];
+
+    if (names.length > shown.length) {
+        lines.push(`  # … ${names.length - shown.length} more file(s)`);
     }
 
     return lines.join("\n");
+}
+
+/**
+ * A directory summary plus its child directories.
+ *
+ * Children are rows, not longer file paths: `models/qwen35/checkpoint.hpp` says the directory twice and hides that
+ * `qwen35` is a group, while `models/ 15` plus `qwen35/ 14` answers "which subdirectory" without a second call.
+ */
+function directoryBlock(dir: MapDirectory): string[] {
+    const languages = Array.from(dir.languages).toSorted().join(",");
+    const block = [`${dir.name}/  ${counted(dir.files, "file")}  ${languages}`];
+    const children = [...dir.children.entries()].toSorted(
+        (left, right) => right[1] - left[1] || left[0].localeCompare(right[0]),
+    );
+    const capped = children.slice(0, MAX_CHILD_DIRS);
+    const labels = capped.map(([name, count]) => `${name}/ ${count}`);
+
+    if (children.length > capped.length) {
+        labels.push(`# … ${children.length - capped.length} more dir(s)`);
+    }
+
+    if (labels.length > 0) {
+        block.push(...nameLines(labels).map((line) => line.text));
+    }
+
+    return block;
+}
+
+interface MapFile {
+    /** File name without its directory; the directory is the block heading. */
+    label: string;
+    declarations: number;
+}
+
+interface MapDirectory {
+    name: string;
+    /** Files under it at any depth. */
+    files: number;
+    languages: Set<string>;
+    /** Files sitting directly in it; children get their own rows. */
+    direct: MapFile[];
+    /** Immediate child directory to its recursive file count. */
+    children: Map<string, number>;
+}
+
+/** What the caller can act on first: the biggest declaration count, then the name. */
+function compareMapFiles(left: MapFile, right: MapFile): number {
+    return right.declarations - left.declarations || left.label.localeCompare(right.label);
+}
+
+/** `(0)` is omitted: a file with no declarations is still a file, not a failed parse. */
+function mapFileLabel(file: MapFile): string {
+    return file.declarations > 0 ? `${file.label} (${file.declarations})` : file.label;
 }
 
 interface NameLine {
