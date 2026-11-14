@@ -35,6 +35,19 @@ export const COMPACTION_REMINDER: ReminderDefinition = {
 };
 
 /**
+ * The always-loaded memories' bodies, supplied at emission by the memory module.
+ *
+ * Kept out of the rotation and away from the decision model: this is context the agent must have, not a nudge
+ * worth weighing against relevance. It rides the same two change points as the memory reminders - the session
+ * start and the fold - because those are when the memory module rebuilds what it holds.
+ */
+export const PINNED_MEMORIES_REMINDER: ReminderDefinition = {
+    id: "pinned",
+    text: "The pinned memories below are reproduced in full because they must not be missed; do not re-read them unless you need detail they do not carry.",
+    guidance: "Always-loaded memories are in context; their rules apply for the whole session.",
+};
+
+/**
  * The instruction a memory-audit finding rides on. Kept out of the rotation because it is tied to an event -
  * a memory edit the audit found something in - not to a cadence, and its facts (which finding, in which tree)
  * are supplied at emission. The audit runs unasked, so this is the only place the agent hears about a memory

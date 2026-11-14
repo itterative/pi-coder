@@ -6,9 +6,19 @@
  * its own name (`memory_system`, `memory_audit_tool_guide`).
  */
 
+import type { PinnedMemory } from "./memories";
+
 /** The memory index as prompt text, so a future turn knows which memories to load. */
 export function memoryPrompt(appendix: string): string {
     return appendix;
+}
+
+/**
+ * The bodies of the pinned memories as one block, for the hidden context the reminders module delivers. The
+ * lead-in that explains why they are here belongs to the reminder catalog, not to the memory module.
+ */
+export function pinnedMemoryBlocks(pinned: readonly PinnedMemory[]): string {
+    return pinned.map((entry) => `**${entry.name}**\n\n${entry.text}`).join("\n\n");
 }
 
 /** When to call the audit, and how to read its findings. */

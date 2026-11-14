@@ -11,7 +11,13 @@ export interface MemoryMeta {
     category?: string;
     priority?: number;
     keep_updated?: boolean;
+    pinned?: boolean;
     status?: string;
+}
+
+export interface ParsedMemory {
+    meta: MemoryMeta;
+    body: string;
 }
 
 function scalarText(value: unknown): string | undefined {
@@ -21,9 +27,9 @@ function scalarText(value: unknown): string | undefined {
     return undefined;
 }
 
-/** Parse and validate the memory-specific frontmatter schema. */
-export function parseFrontmatter(content: string, filePath: string): MemoryMeta {
-    const { frontmatter } = parseGenericFrontmatter(content, filePath);
+/** Parse and validate the memory-specific frontmatter schema, keeping the body for pinned memories. */
+export function parseMemory(content: string, filePath: string): ParsedMemory {
+    const { frontmatter, body } = parseGenericFrontmatter(content, filePath);
     const name = scalarText(frontmatter.name);
     const description = scalarText(frontmatter.description);
 
@@ -52,8 +58,16 @@ export function parseFrontmatter(content: string, filePath: string): MemoryMeta 
         meta.keep_updated = keepUpdated === "true" || keepUpdated === "yes";
     }
 
+    const pinned = scalarText(frontmatter.pinned);
+    if (pinned !== undefined) meta.pinned = pinned === "true" || pinned === "yes";
+
     const status = scalarText(frontmatter.status);
     if (status !== undefined) meta.status = status;
 
-    return meta;
+    return { meta, body };
+}
+
+/** The indexed metadata alone, for callers that never read the body. */
+export function parseFrontmatter(content: string, filePath: string): MemoryMeta {
+    return parseMemory(content, filePath).meta;
 }

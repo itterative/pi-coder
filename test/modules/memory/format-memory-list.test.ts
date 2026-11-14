@@ -66,4 +66,14 @@ describe("formatMemoryList", () => {
 
         expect(out).toContain("- **m** [high-churn] — d");
     });
+
+    it("annotates pinned memories, and renders both flags together", () => {
+        const out = formatMemoryList([
+            mem({ name: "pinned", description: "d", pinned: true }),
+            mem({ name: "both", description: "d", pinned: true, keep_updated: true }),
+        ]);
+
+        expect(out).toContain("- **pinned** [pinned] — d");
+        expect(out).toContain("- **both** [pinned] [high-churn] — d");
+    });
 });

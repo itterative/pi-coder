@@ -19,6 +19,7 @@ history, the reasoning behind the fields, and the deferred ideas live in [meta/m
 | `category` | string | Groups memories into sections: `architecture`, `meta`, `workflow`, `convention` |
 | `priority` | number | Sorts memories within a category (lower = first) |
 | `keep_updated` | boolean | Marks high-churn memories with `[high-churn]` in the list |
+| `pinned` | boolean | Injects the whole body as hidden context at session start and after a fold; also marks `[pinned]` in the list |
 | `status` | string | For plans: `Complete`, `In progress`, `Deferred`, etc. |
 
 ## Presentation rules
@@ -27,11 +28,24 @@ history, the reasoning behind the fields, and the deferred ideas live in [meta/m
 2. **Grouping**: Memories are grouped by `category` under markdown headers (`#### Architecture`, etc.)
 3. **Order**: Categories appear in fixed order: `architecture` → `meta` → `workflow` → `tools` → `convention` → *unknown categories (alphabetical)* → `Other` (uncategorized). Memories with a category not in the fixed list render as their own titled section between the known categories and `Other`, so a new category never causes a memory to disappear.
 4. **Sorting**: Within each category, memories sort by `priority` ascending (default 99)
-5. **Annotation**: `keep_updated: true` renders as `[high-churn]` next to the memory name
+5. **Annotation**: `keep_updated: true` renders as `[high-churn]` next to the memory name, and `pinned: true` as `[pinned]`; both may appear
 6. **Guideline**: The system prompt includes: *"Memories marked with [high-churn] are high-churn — review and update them after relevant changes"*
 7. **Quoting**: quote any `description` that contains `: `. An unquoted colon makes the frontmatter invalid YAML, `parseFrontmatter` throws, `scanMemories` silently drops the file, and the memory vanishes from the index without failing anything (`agents.md` hit exactly this on 2026-10-21)
 8. **Length**: keep an *indexed* description to one line, ≤ 150 characters — every indexed description is rendered into every system prompt. Nested detail docs are never rendered, so a longer nested description is allowed and needs no trimming
 9. **Audit**: the audit re-reads both trees with this parser and reports files that fail to index, oversized indexes, over-budget descriptions, nested docs no index names, and broken or stale references. Only this parser can see a memory that silently failed to parse. It is **automatic**: `src/modules/reminders/memory-audit.ts` fingerprints both trees at each step boundary and reports a changed finding set as a reminder in the run that caused it, so no rule tells an agent to run it. The `memory_audit` tool and `/memory-audit` command remain for the full report on demand. Its errors are broken things; its warnings are review indicators that may be deliberate
+
+## Pinned memories
+
+`pinned: true` puts a memory's whole body into hidden context (a `<pi_coder_reminder>` message) at session
+start and after every compaction, so the agent has the rule without choosing to read it. The contract:
+
+1. **The body is the injected text.** There is no second `pin:` field, so the file cannot drift from what the model sees. If a rule needs a long explanation, the pinned memory states the rule and points at the memory or nested doc that carries the detail.
+2. **≤ 1024 characters** (trimmed), and all pinned bodies share a **4096-character pool** across both trees. An over-budget memory is *skipped, never truncated*; the audit reports `pinned-budget` (error per memory, warning for the pool).
+3. **Delivery**: it rides the `memory-read` reminder at session start and the `compaction` reminder after a fold, combined into the same hidden message. Delegated children get it too.
+4. **Refresh anchors**: the body is re-read only at session start and after a fold. An edit mid-session is invisible until the next anchor, exactly like the index list.
+5. **Keep it a rule**, not prose: short imperative lines that must survive a compaction are what this field is for.
+
+A pinned memory still appears in the index with `[pinned]`, so its description stays the map entry.
 
 ## Snapshot lifecycle
 

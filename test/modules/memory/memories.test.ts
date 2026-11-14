@@ -5,12 +5,17 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { dedent } from "./utils";
-import { scanMemories } from "../../../src/modules/memory/memories";
+import {
+    budgetedPinned,
+    PINNED_TEXT_LIMIT,
+    PINNED_TOTAL_LIMIT,
+    scanMemories,
+} from "../../../src/modules/memory/memories";
 
 describe("scanMemories", () => {
     it("returns empty results for non-existent directory", async () => {
         const result = await scanMemories("/non/existent/path");
-        expect(result).toEqual({ memories: [], errors: [] });
+        expect(result).toEqual({ memories: [], errors: [], pinned: [] });
     });
 
     it("collects memories and reports parse errors", async () => {
@@ -56,5 +61,54 @@ describe("scanMemories", () => {
         } finally {
             await rm(dir, { recursive: true });
         }
+    });
+
+    it("collects pinned bodies, keeping over-budget ones for the audit to report", async () => {
+        const dir = join(tmpdir(), `pi-memory-pinned-${Date.now()}`);
+        await mkdir(dir, { recursive: true });
+
+        try {
+            await writeFile(
+                join(dir, "rule.md"),
+                dedent`
+                    ---
+                    name: rule
+                    description: A pinned rule
+                    pinned: true
+                    ---
+
+                    # Rule
+
+                    Always do the thing.
+                `,
+            );
+            await writeFile(
+                join(dir, "long.md"),
+                `---\nname: long\ndescription: Too long to inject\npinned: true\n---\n\n${"x".repeat(PINNED_TEXT_LIMIT + 1)}\n`,
+            );
+
+            const result = await scanMemories(dir);
+
+            expect(result.pinned.map((entry) => entry.name).sort()).toEqual(["long", "rule"]);
+            expect(result.pinned.find((entry) => entry.name === "rule")?.text).toBe(
+                "# Rule\n\nAlways do the thing.",
+            );
+            expect(budgetedPinned(result.pinned).map((entry) => entry.name)).toEqual(["rule"]);
+        } finally {
+            await rm(dir, { recursive: true });
+        }
+    });
+
+    it("skips a pinned memory past the per-memory and total budgets, never truncating it", () => {
+        const entry = (name: string, length: number) => ({ name, text: "a".repeat(length) });
+
+        const kept = budgetedPinned([
+            entry("first", PINNED_TEXT_LIMIT),
+            entry("too-long", PINNED_TEXT_LIMIT + 1),
+            entry("second", 1),
+            entry("past-total", PINNED_TOTAL_LIMIT),
+        ]);
+
+        expect(kept.map((memory) => memory.name)).toEqual(["first", "second"]);
     });
 });

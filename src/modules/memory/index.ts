@@ -5,9 +5,9 @@ import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-wor
 
 import { getUserMemoryDirectory } from "../../common/constants";
 import { setPromptSection } from "../../common/prompt-section";
-import { scanMemories, type MemoryMeta } from "./memories";
+import { budgetedPinned, scanMemories, type MemoryMeta, type PinnedMemory } from "./memories";
 import { FrontmatterParseError } from "./frontmatter";
-import { memoryPrompt } from "./prompt";
+import { memoryPrompt, pinnedMemoryBlocks } from "./prompt";
 import registerMemoryAudit from "./audit-ui";
 
 interface CachedMemoryIndex {
@@ -15,6 +15,7 @@ interface CachedMemoryIndex {
     userDir: string;
     projectMemories: MemoryMeta[];
     userMemories: MemoryMeta[];
+    pinned: PinnedMemory[];
 }
 
 const ENTRY_TYPE = "pi-memory:memory-index";
@@ -86,8 +87,12 @@ export function formatMemoryList(memories: MemoryMeta[]): string {
         first = false;
         lines.push(`#### ${title}`);
         for (const m of group) {
-            const flag = m.keep_updated ? " [high-churn]" : "";
-            lines.push(`- **${m.name}**${flag} — ${m.description}`);
+            const flags = [
+                ...(m.pinned ? ["[pinned]"] : []),
+                ...(m.keep_updated ? ["[high-churn]"] : []),
+            ];
+            const annotation = flags.length > 0 ? ` ${flags.join(" ")}` : "";
+            lines.push(`- **${m.name}**${annotation} — ${m.description}`);
         }
     };
 
@@ -135,6 +140,7 @@ Indexed memories are stored directly in these directories. Detailed reference do
 ### Guidelines
 
 - Read relevant memories before starting work.
+- Pinned memories are already in full in the hidden context you received at the start of the session and after each compaction; use that text directly and do not re-read them unless you need detail they do not carry.
 - Write user-level memories only when the user asks.
 - Save a project memory only for a fact the diff cannot carry: an invariant, a failure mode, a non-obvious constraint, or a memory that is now wrong. Update in place, write nothing when nothing is wrong, and never record what you changed or that validation passed.
 - Review [high-churn] memories after relevant changes; update only a wrong one.
@@ -154,10 +160,14 @@ interface MemoryDirectories {
     userDir: string;
 }
 
-interface ScannedMemoryIndex {
+interface ScannedAppendix {
+    appendix: string;
+    pinnedText: string;
+}
+
+interface ScannedMemoryIndex extends ScannedAppendix {
     snapshot: CachedMemoryIndex;
     errors: FrontmatterParseError[];
-    appendix: string;
 }
 
 function memoryDirectories(cwd: string): MemoryDirectories {
@@ -193,6 +203,12 @@ function findBranchSnapshot(
                 return undefined;
             }
 
+            // A snapshot recorded before pinned memories existed cannot say what is pinned, so it is stale
+            // even though its index lists are fine: rebuild from disk once and record a current one.
+            if (!Array.isArray(snapshot.pinned)) {
+                return undefined;
+            }
+
             return snapshot;
         }
     }
@@ -200,13 +216,21 @@ function findBranchSnapshot(
     return undefined;
 }
 
-function appendixFromSnapshot(snapshot: CachedMemoryIndex): string {
-    return buildPromptAppendix(
-        snapshot.projectMemories,
-        snapshot.userMemories,
-        snapshot.projectDir,
-        snapshot.userDir,
-    );
+function appendixFromSnapshot(snapshot: CachedMemoryIndex): ScannedAppendix {
+    return {
+        appendix: buildPromptAppendix(
+            snapshot.projectMemories,
+            snapshot.userMemories,
+            snapshot.projectDir,
+            snapshot.userDir,
+        ),
+        pinnedText: pinnedTextFor(snapshot.pinned),
+    };
+}
+
+/** The pinned bodies that fit the budgets, as the hidden-context block the reminder carries. */
+function pinnedTextFor(pinned: readonly PinnedMemory[]): string {
+    return pinnedMemoryBlocks(budgetedPinned(pinned));
 }
 
 /** Read both trees and build the snapshot and prompt appendix from disk. */
@@ -216,6 +240,7 @@ async function scanMemoryIndex(dirs: MemoryDirectories): Promise<ScannedMemoryIn
         scanMemories(dirs.userDir),
     ]);
     const errors = [...projectResult.errors, ...userResult.errors];
+    const pinned = [...projectResult.pinned, ...userResult.pinned];
 
     return {
         snapshot: {
@@ -223,6 +248,7 @@ async function scanMemoryIndex(dirs: MemoryDirectories): Promise<ScannedMemoryIn
             userDir: dirs.userDir,
             projectMemories: projectResult.memories,
             userMemories: userResult.memories,
+            pinned,
         },
         errors,
         appendix: buildPromptAppendix(
@@ -232,6 +258,7 @@ async function scanMemoryIndex(dirs: MemoryDirectories): Promise<ScannedMemoryIn
             dirs.userDir,
             errors,
         ),
+        pinnedText: pinnedTextFor(pinned),
     };
 }
 
@@ -254,8 +281,14 @@ function notifyRescanFailure(ctx: ExtensionContext, what: string, error: unknown
     ctx.ui.notify(`pi-memory: ${what}: ${message}`, "warning");
 }
 
-export default function registerMemoryExtension(pi: ExtensionAPI) {
+export interface MemoryExtensionHandle {
+    /** The pinned bodies that fit the budgets, as the block the reminders module delivers as hidden context. */
+    pinnedText(): string;
+}
+
+export default function registerMemoryExtension(pi: ExtensionAPI): MemoryExtensionHandle {
     let cachedAppendix = "";
+    let cachedPinnedText = "";
 
     pi.on("session_start", async (_event, ctx) => {
         const dirs = memoryDirectories(ctx.cwd);
@@ -269,10 +302,13 @@ export default function registerMemoryExtension(pi: ExtensionAPI) {
             : undefined;
 
         if (cached) {
-            cachedAppendix = appendixFromSnapshot(cached);
+            const restored = appendixFromSnapshot(cached);
+            cachedAppendix = restored.appendix;
+            cachedPinnedText = restored.pinnedText;
         } else {
             const scanned = await scanMemoryIndex(dirs);
             cachedAppendix = scanned.appendix;
+            cachedPinnedText = scanned.pinnedText;
             notifyParseErrors(ctx, scanned.errors);
 
             if (sessionCacheEnabled()) {
@@ -288,13 +324,17 @@ export default function registerMemoryExtension(pi: ExtensionAPI) {
             : undefined;
 
         if (cached) {
-            cachedAppendix = appendixFromSnapshot(cached);
+            const restored = appendixFromSnapshot(cached);
+            cachedAppendix = restored.appendix;
+            cachedPinnedText = restored.pinnedText;
         } else {
             // No snapshot at this branch point, or the session cache is off: read the trees. This path
             // appends nothing on purpose - a navigation is not a session start, and every return to a
             // point at or after a compaction would otherwise add another duplicate sibling snapshot.
             try {
-                cachedAppendix = (await scanMemoryIndex(dirs)).appendix;
+                const scanned = await scanMemoryIndex(dirs);
+                cachedAppendix = scanned.appendix;
+                cachedPinnedText = scanned.pinnedText;
             } catch (error) {
                 // A failed rescan must cost freshness, never the appendix already in the prompt.
                 notifyRescanFailure(ctx, "rescan after tree navigation failed", error);
@@ -311,6 +351,7 @@ export default function registerMemoryExtension(pi: ExtensionAPI) {
             const dirs = memoryDirectories(ctx.cwd);
             const scanned = await scanMemoryIndex(dirs);
             cachedAppendix = scanned.appendix;
+            cachedPinnedText = scanned.pinnedText;
             notifyParseErrors(ctx, scanned.errors);
 
             if (sessionCacheEnabled()) {
@@ -329,4 +370,6 @@ export default function registerMemoryExtension(pi: ExtensionAPI) {
 
         setPromptSection(event.systemPromptOptions, "memory_system", memoryPrompt(cachedAppendix));
     });
+
+    return { pinnedText: () => cachedPinnedText };
 }

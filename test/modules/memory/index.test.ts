@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 
-import registerMemoryExtension from "../../../src/modules/memory";
+import registerMemoryExtension, { type MemoryExtensionHandle } from "../../../src/modules/memory";
 import { compactionMarker, customEntry } from "../../helpers/compaction-doubles";
 import {
     createPiStub,
@@ -21,6 +21,8 @@ let root: string;
 let projectCwd: string;
 let projectDir: string;
 let userDir: string;
+/** The handle `harness()` registered, so a case can read what the reminders module would deliver. */
+let memoryHandle: MemoryExtensionHandle;
 
 beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "pi-memory-index-"));
@@ -38,7 +40,7 @@ afterEach(async () => {
 
 function harness(): PiStub {
     const stub = createPiStub();
-    registerMemoryExtension(stub.pi);
+    memoryHandle = registerMemoryExtension(stub.pi);
     return stub;
 }
 
@@ -64,12 +66,21 @@ async function writeMemory(name: string, description: string): Promise<void> {
     );
 }
 
+async function writePinnedMemory(name: string, body: string): Promise<void> {
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+        join(projectDir, `${name}.md`),
+        `---\nname: ${name}\ndescription: A pinned rule\npinned: true\n---\n\n${body}\n`,
+    );
+}
+
 function indexEntry(id: string, name: string, description: string): SessionEntry {
     return customEntry(id, MEMORY_INDEX_TYPE, {
         projectDir,
         userDir,
         projectMemories: [{ name, description, category: "workflow" }],
         userMemories: [],
+        pinned: [],
     });
 }
 
@@ -193,5 +204,72 @@ describe("memory index snapshot lifecycle", () => {
 
         expect(await promptAfterRun(stub, ctx)).toContain("second memory");
         expect(stub.entries).toHaveLength(0);
+    });
+
+    it("exposes pinned bodies for hidden context and refreshes them after a compaction", async () => {
+        await writePinnedMemory("rule", "Always do the thing.");
+        const stub = harness();
+        const ctx = context([]);
+        await startSession(stub, ctx);
+
+        expect(memoryHandle.pinnedText()).toContain("**rule**");
+        expect(memoryHandle.pinnedText()).toContain("Always do the thing.");
+        expect(await promptAfterRun(stub, ctx)).toContain("[pinned]");
+
+        await writePinnedMemory("rule", "Do the new thing instead.");
+        await stub.requireHandler("session_compact")({ reason: "manual" }, ctx);
+
+        expect(memoryHandle.pinnedText()).toContain("Do the new thing instead.");
+        expect(memoryHandle.pinnedText()).not.toContain("Always do the thing.");
+    });
+
+    it("skips an over-budget pinned memory instead of truncating it", async () => {
+        await writePinnedMemory("rule", "x".repeat(1025));
+        const stub = harness();
+        const ctx = context([]);
+        await startSession(stub, ctx);
+
+        expect(memoryHandle.pinnedText()).toBe("");
+        // The pin flag still shows in the index; the audit is what says the body stopped applying.
+        expect(await promptAfterRun(stub, ctx)).toContain("[pinned]");
+    });
+
+    it("restores pinned bodies from the branch snapshot", async () => {
+        const branch = [
+            customEntry("a1", MEMORY_INDEX_TYPE, {
+                projectDir,
+                userDir,
+                projectMemories: [],
+                userMemories: [],
+                pinned: [{ name: "rule", text: "From the branch." }],
+            }),
+        ];
+        const stub = harness();
+        const ctx = context(branch);
+
+        await startSession(stub, ctx);
+
+        expect(memoryHandle.pinnedText()).toContain("From the branch.");
+        expect(stub.entries).toHaveLength(0);
+    });
+
+    it("rescans a snapshot recorded before pinned memories existed", async () => {
+        await writePinnedMemory("rule", "From disk.");
+        const branch = [
+            customEntry("a1", MEMORY_INDEX_TYPE, {
+                projectDir,
+                userDir,
+                projectMemories: [{ name: "old", description: "old list", category: "workflow" }],
+                userMemories: [],
+            }),
+        ];
+        const stub = harness();
+        const ctx = context(branch);
+
+        await startSession(stub, ctx);
+
+        expect(memoryHandle.pinnedText()).toContain("From disk.");
+        // The stale snapshot is not reused, so a current one was recorded.
+        expect(stub.entries).toHaveLength(1);
     });
 });

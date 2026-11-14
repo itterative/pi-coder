@@ -27,8 +27,8 @@ export default function (pi: ExtensionAPI) {
     registerDecisionProvider(pi, decisionConfig.load(process.cwd()));
     registerDecisionModelShortcut(pi);
     registerStatusFooter(pi);
-    registerMemoryExtension(pi);
-    registerRemindersExtension(pi);
+    const memory = registerMemoryExtension(pi);
+    registerRemindersExtension(pi, { pinnedText: () => memory.pinnedText() });
     registerScratchpadExtension(pi);
     registerTodoListExtension(pi);
     registerCompactionExtension(pi);

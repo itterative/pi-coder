@@ -18,11 +18,15 @@ export const MEMORIES_UNIT = {
     extension: (_runtime: ChildExtensionRuntime): NamedInlineExtension => ({
         name: "pi-coder-memory-child",
         hidden: true,
-        // The appendix and the reminder that points at it are one unit: registering the appendix without
-        // the memory-scoped reminder would drop the nudge children received before reminders existed.
+        // The appendix, the pinned bodies it exposes, and the reminder that points at it are one unit:
+        // registering the appendix without the memory-scoped reminder would drop the nudge children received
+        // before reminders existed, and would drop the pinned context with it.
         factory: (pi) => {
-            registerMemoryExtension(pi);
-            registerRemindersExtension(pi, { scope: "memory" });
+            const memory = registerMemoryExtension(pi);
+            registerRemindersExtension(pi, {
+                scope: "memory",
+                pinnedText: () => memory.pinnedText(),
+            });
         },
     }),
 } as const;

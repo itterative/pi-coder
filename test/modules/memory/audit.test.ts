@@ -30,6 +30,7 @@ import {
     summarizeAudit,
     type AuditFinding,
 } from "../../../src/modules/memory/audit";
+import { PINNED_TEXT_LIMIT, PINNED_TOTAL_LIMIT } from "../../../src/modules/memory/memories";
 
 const roots: string[] = [];
 
@@ -173,6 +174,81 @@ describe("auditMemoryTrees", () => {
         const rules = findings.map((finding) => finding.rule);
         expect(rules).toContain("description");
         expect(rules).toContain("index-budget");
+    });
+
+    it("fails an over-budget pinned body because it stops being injected", async () => {
+        const findings = await audit({
+            project: {
+                "rule.md": `
+                    ---
+                    name: rule
+                    description: A pinned rule.
+                    pinned: true
+                    ---
+
+                    ${"x".repeat(PINNED_TEXT_LIMIT + 1)}
+                    `,
+            },
+        });
+
+        const finding = findings.find((entry) => entry.rule === "pinned-budget");
+        expect(finding?.severity).toBe("error");
+        expect(finding?.path).toBe("rule.md");
+        expect(finding?.message).toContain("skipped from injection");
+    });
+
+    it("warns when the pinned pool across both trees is over budget", async () => {
+        const pinnedFile = (name: string) => `
+            ---
+            name: ${name}
+            description: Pinned ${name}.
+            pinned: true
+            ---
+
+            ${"x".repeat(PINNED_TEXT_LIMIT)}
+            `;
+
+        // Four full-size bodies exactly fill the pool; the fifth is the one that stops being injected.
+        const findings = await audit({
+            project: {
+                "a.md": pinnedFile("a"),
+                "b.md": pinnedFile("b"),
+                "c.md": pinnedFile("c"),
+                "d.md": pinnedFile("d"),
+                "e.md": pinnedFile("e"),
+            },
+        });
+
+        const finding = findings.find(
+            (entry) => entry.rule === "pinned-budget" && entry.severity === "warning",
+        );
+        expect(finding?.path).toBe("e.md");
+        expect(finding?.message).toContain(String(PINNED_TOTAL_LIMIT));
+    });
+
+    it("warns that a nested doc's pinned flag does nothing", async () => {
+        const findings = await audit({
+            project: {
+                "sandbox.md": cleanIndex,
+                "sandbox/path-safety.md": `
+                    ---
+                    name: path-safety
+                    description: Path rules.
+                    pinned: true
+                    ---
+
+                    # Path safety
+
+                    [../sandbox.md](../sandbox.md)
+                    `,
+            },
+        });
+
+        const finding = findings.find(
+            (entry) => entry.rule === "pinned-budget" && entry.path === "sandbox/path-safety.md",
+        );
+        expect(finding?.severity).toBe("warning");
+        expect(finding?.message).toContain("has no effect");
     });
 
     it("treats a nested doc no index names as unreachable, but not one the index links", async () => {

@@ -26,6 +26,7 @@ import {
     MEMORY_AUDIT_REMINDER,
     MEMORY_READ_REMINDER,
     OUTLINE_NUDGE_REMINDER,
+    PINNED_MEMORIES_REMINDER,
     REMINDER_NOTICE,
 } from "./catalog";
 import { ContextGrowthTracker } from "./context-growth";
@@ -64,6 +65,16 @@ export interface ReminderRegistrationOptions {
      * before the rotation existed.
      */
     scope?: "full" | "memory";
+
+    /**
+     * The pinned-memory block the memory module would always load, if the trees have one.
+     *
+     * A provider rather than a string because the memory module rebuilds it at the same change points that
+     * rebuild the appendix, and the handler that delivers it runs synchronously. Register the memory module
+     * first: its `session_start` fills this in before the first turn. Absent means no memory module is
+     * registered (a harness, or a build without it), which injects nothing.
+     */
+    pinnedText?: () => string;
 }
 
 export interface ReminderExtensionHandle {
@@ -421,13 +432,37 @@ export default function registerRemindersExtension(
     };
 
     /**
+     * The pinned memories' bodies, held for the same message as the armed reminder.
+     *
+     * The text comes from the memory module through `pinnedText`, not from the catalog: the bodies are files
+     * that change between sessions. A session start and a fold are the only points the memory module rebuilds
+     * them, so those are the only points they are injected - tree navigation resumes a branch that already
+     * carries the message.
+     */
+    const pinnedHeld = (turn: number): HeldReminder | undefined => {
+        const text = options.pinnedText?.().trim();
+        if (text === undefined || text.length === 0) {
+            return undefined;
+        }
+
+        return {
+            id: PINNED_MEMORIES_REMINDER.id,
+            text: `${PINNED_MEMORIES_REMINDER.text}\n\n${text}`,
+            turn,
+            contextTokens: scheduler.snapshot().thresholdBaseline ?? 0,
+        };
+    };
+
+    /**
      * The message a delivery point sends, for one held reminder or several.
      *
      * Everything a delivery point holds travels as **one** message. pi delivers a queued steer before the next
      * inference, but two sends at one boundary cost a delivery each: the second arrived on the next user prompt,
      * which put a memory audit finding a whole turn late. Combining also keeps the wrapper and its "automated"
      * notice to a single occurrence, which is what the notice is for. Held entries are deduped by id, newest
-     * wins: a reminder re-decided while held supersedes the copy already waiting.
+     * wins: a reminder re-decided while held supersedes the copy already waiting. Entries are separated by a
+     * blank-line rule (`---`), so a model reading the combined block sees where the pinned bodies end and the
+     * armed reminder begins.
      */
     const heldMessage = (held: readonly HeldReminder[]) => {
         const unique = [...new Map(held.map((entry) => [entry.id, entry])).values()];
@@ -435,7 +470,7 @@ export default function registerRemindersExtension(
 
         return {
             customType: REMINDER_CUSTOM_TYPE,
-            content: formatReminder(unique.map((entry) => entry.text).join("\n\n")),
+            content: formatReminder(unique.map((entry) => entry.text).join("\n\n---\n\n")),
             display: false,
             details: {
                 id: newest.id,
@@ -1289,7 +1324,8 @@ export default function registerRemindersExtension(
         // The session reminder is already decided, and a rotation with both triggers at zero is off, so
         // neither turn is worth a classifier request or a branch scan.
         const snapshot = scheduler.snapshot();
-        const rotationTurn = scope === "full" && rotationEnabled && !snapshot.sessionArmed;
+        const sessionArmed = snapshot.sessionArmed;
+        const rotationTurn = scope === "full" && rotationEnabled && !sessionArmed;
 
         scheduler.beginTurn();
 
@@ -1307,7 +1343,7 @@ export default function registerRemindersExtension(
             const emitTurn = scheduler.snapshot().userTurns;
             // Only the rotation is tracked: an armed reminder belongs to the catalog's session lifecycle, not to
             // the rotation the `shown` history feeds.
-            if (reminder !== undefined && !snapshot.sessionArmed) {
+            if (reminder !== undefined && !sessionArmed) {
                 shown.set(reminder.id, emitTurn);
             }
 
@@ -1327,11 +1363,21 @@ export default function registerRemindersExtension(
                 );
             }
 
-            if (reminder === undefined) {
+            // Everything this delivery point holds leaves as one message: the pinned bodies ride the armed
+            // reminder's message rather than costing a second delivery, and `heldMessage` keeps one wrapper.
+            const held: HeldReminder[] = [];
+            if (sessionArmed) {
+                const pinned = pinnedHeld(emitTurn);
+                if (pinned !== undefined) held.push(pinned);
+            }
+            if (reminder !== undefined) {
+                held.push(heldReminder(ctx, reminder, emitTurn));
+            }
+            if (held.length === 0) {
                 return;
             }
 
-            return { message: heldMessage([heldReminder(ctx, reminder, emitTurn)]) };
+            return { message: heldMessage(held) };
         }
 
         // The held state is published before the consult resolves, so a turn whose judgement is slow still moves

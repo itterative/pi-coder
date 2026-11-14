@@ -47,7 +47,7 @@ let ctx: ExtensionContext;
 /** The extension's judgement queue, so a case waits for a deferred decision the way the next hook would. */
 let idle: () => Promise<void>;
 
-function harness(options: { scope?: "full" | "memory" } = {}): PiStub {
+function harness(options: { scope?: "full" | "memory"; pinnedText?: () => string } = {}): PiStub {
     const stub = createPiStub();
     idle = registerRemindersExtension(stub.pi, options).idle;
     return stub;
@@ -209,6 +209,47 @@ describe("reminder emission", () => {
         // The block says it is automated, because it rides in the user role.
         expect(result?.message?.content).toContain("not from the user");
         expect(result?.message?.content).toContain("memory_system");
+    });
+
+    it("rides the memory reminder with the pinned bodies in one message", async () => {
+        const stub = harness({ pinnedText: () => "**rule**\n\nAlways do the thing." });
+        await startSession(stub);
+
+        const result = await userTurn(stub);
+
+        expect(result?.message?.content).toContain("must not be missed");
+        expect(result?.message?.content).toContain("**rule**");
+        expect(result?.message?.content).toContain("Always do the thing.");
+        expect(result?.message?.content).toContain("memory_system");
+        // A rule separates the pinned block from the armed reminder so the boundary stays visible.
+        expect(result?.message?.content).toContain("\n\n---\n\n");
+        // One delivery point, one message: the armed reminder is returned with the pinned block, not sent twice.
+        expect(stub.sentMessages).toHaveLength(0);
+    });
+
+    it("re-sends pinned bodies with the compaction reminder", async () => {
+        const stub = harness({ pinnedText: () => "**rule**\n\nAlways do the thing." });
+        await startSession(stub);
+        await userTurn(stub);
+
+        await stub.requireHandler("session_compact")({ reason: "manual" }, ctx);
+
+        const folded = await userTurn(stub);
+
+        expect(folded?.message?.content).toContain("compacted");
+        expect(folded?.message?.content).toContain("Always do the thing.");
+    });
+
+    it("does not repeat pinned bodies on a rotation turn", async () => {
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "1");
+        useExploringBranch();
+        const stub = harness({ pinnedText: () => "**rule**" });
+        await startSession(stub);
+
+        expect((await userTurn(stub))?.message?.content).toContain("**rule**");
+
+        const rotated = await userTurn(stub);
+        expect(rotated?.message?.content ?? "").not.toContain("**rule**");
     });
 
     it("rotates after the configured number of turns", async () => {

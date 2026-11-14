@@ -13,7 +13,13 @@ import { readdir, readFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 
 import { getUserMemoryDirectory } from "../../common/constants";
-import { FrontmatterParseError, parseFrontmatter, type MemoryMeta } from "./frontmatter";
+import {
+    FrontmatterParseError,
+    parseFrontmatter,
+    parseMemory,
+    type MemoryMeta,
+} from "./frontmatter";
+import { PINNED_TEXT_LIMIT, PINNED_TOTAL_LIMIT } from "./memories";
 
 /** Which tree an audit reads. `both` is what an agent means: a reference crosses the trees. */
 export type AuditScope = "project" | "user" | "both";
@@ -72,6 +78,7 @@ type AuditRule =
     | "description"
     | "category"
     | "index-budget"
+    | "pinned-budget"
     | "reachability"
     | "dangling-reference"
     | "broken-link"
@@ -129,6 +136,11 @@ export async function auditMemoryTrees(options: {
     ] as const) {
         results.push(buildResult(label, options, files, indexedNames));
     }
+
+    addPinnedTotalFinding(results, [
+        ["project", projectFiles],
+        ["user", userFiles],
+    ]);
 
     return results;
 }
@@ -202,6 +214,53 @@ function parseMeta(file: MemoryFile): MemoryMeta | undefined {
     }
 }
 
+/** The Markdown body after the frontmatter, or undefined when the file does not parse. */
+function memoryBody(file: MemoryFile): string | undefined {
+    try {
+        return parseMemory(file.text, file.abs).body;
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * Pinned bodies are injected together, so the total is one pool across both trees. Report the first file that
+ * pushes the pool over; the runtime keeps only what fits, so the rest silently stops applying without this.
+ */
+function addPinnedTotalFinding(
+    results: AuditResult[],
+    trees: readonly [label: "project" | "user", files: MemoryFile[]][],
+): void {
+    let used = 0;
+
+    for (const [label, files] of trees) {
+        for (const file of files.filter((entry) => entry.indexed)) {
+            const meta = parseMeta(file);
+            if (meta?.pinned !== true) continue;
+
+            const body = memoryBody(file)?.trim();
+            if (body === undefined || body.length > PINNED_TEXT_LIMIT) continue;
+
+            used += body.length;
+            if (used <= PINNED_TOTAL_LIMIT) continue;
+
+            const result = results.find((candidate) => candidate.label === label);
+            if (result === undefined) return;
+
+            result.findings = sortFindings([
+                ...result.findings,
+                {
+                    severity: "warning",
+                    path: file.rel,
+                    rule: "pinned-budget",
+                    message: `pinned memories total ${used} chars (budget ${PINNED_TOTAL_LIMIT}); the memories that no longer fit are not injected`,
+                },
+            ]);
+            return;
+        }
+    }
+}
+
 /** The indexed tree is the one the extension actually reads, so report its real failures. */
 function checkIndexed(dir: string, files: MemoryFile[]): AuditFinding[] {
     const findings: AuditFinding[] = [];
@@ -266,6 +325,18 @@ function checkIndexedFile(file: MemoryFile, rel: string): AuditFinding[] {
             rule: "description",
             message: `description is ${meta.description.length} chars (advisory limit ${INDEXED_DESCRIPTION_LIMIT}); it is rendered into every system prompt`,
         });
+    }
+
+    if (meta.pinned === true) {
+        const body = memoryBody(file)?.trim() ?? "";
+        if (body.length > PINNED_TEXT_LIMIT) {
+            findings.push({
+                severity: "error",
+                path: rel,
+                rule: "pinned-budget",
+                message: `pinned body is ${body.length} chars (limit ${PINNED_TEXT_LIMIT}); it is skipped from injection until shortened`,
+            });
+        }
     }
 
     const rawCategory = readFrontmatterValue(file.text, "category");
@@ -339,6 +410,18 @@ function checkNestedFrontmatter(file: MemoryFile): AuditFinding[] {
                 path: file.rel,
                 rule: "name",
                 message: `name "${meta.name}" does not match the filename stem "${stem}"`,
+            },
+        ];
+    }
+
+    if (meta.pinned === true) {
+        return [
+            {
+                severity: "warning",
+                path: file.rel,
+                rule: "pinned-budget",
+                message:
+                    "nested docs are never indexed, so pinned has no effect; pin the index that names this doc instead",
             },
         ];
     }

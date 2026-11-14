@@ -164,6 +164,32 @@ First run against real trees: project `12 indexed, 61 nested, 0 errors, 0 warnin
 B, `searching-code.md` 5,597 B, `llama-cpp-quirks.md` 4,766 B — and three over-budget descriptions). Same bloat
 pattern the project tree just lost, left unedited because user-level memories change only on explicit request.
 
+## Pinned memories
+
+`pinned: true` injects a memory's body as hidden context at session start and after a fold. The contract lives
+in [../memory-system-improvements.md](../memory-system-improvements.md); this section is why it is a message and
+not a prompt section.
+
+pi builds the system prompt once per run: `_prepareRun()` calls `emitBeforeAgentStart(...)` and then
+`agent.prompt(messages)`. Auto-compaction runs inside that run loop (`_handlePostAgentRun` -> `_checkCompaction`)
+and retries with `agent.continue()`, not a new `_prepareRun`, so no new `before_agent_start` fires for the
+retried inference. The appendix that `session_compact` rebuilds is therefore not rendered into the prompt that
+follows the fold. A hidden user-role message has no such gap: it is delivered after the fold regardless of how
+the system prompt was assembled, which is why pinned text rides the `memory-read`/`compaction` reminders.
+
+- **Body, not a `pin:` field**: one source of truth. A pinned memory that outgrows 1024 characters is rewritten
+  or split, with the detail left in a normal memory or nested doc.
+- **Snapshot**: `pinned` is part of the `pi-memory:memory-index` entry, so a branch restore brings the same
+  bodies back. A snapshot recorded before the field existed is rejected by `findBranchSnapshot` rather than read
+  as "nothing pinned", which forces one rescan and a current snapshot.
+- **Skipped, not truncated**: half a rule can be worse than none. `pinned-budget` errors name the file, and the
+  automatic audit steers the finding, so the agent learns the pin stopped applying.
+- **One selection**: `PINNED_TEXT_LIMIT`, `PINNED_TOTAL_LIMIT`, and `budgetedPinned` live in
+  `src/modules/memory/memories.ts`; the injection path and the audit both use those constants rather than
+  re-deriving the budget.
+- **Naming**: the field is `pinned`, not `always_load`, to match what the index annotation says and to stay
+  short in a table.
+
 ## Snapshot lifecycle (2026-10-21)
 
 The appendix is not rebuilt on every prompt. It is a branch-aware snapshot with three anchors, and the anchors

@@ -32,6 +32,7 @@ export interface RotationReminderDefinition extends ReminderDefinition {
 export type ReminderId =
     | "memory-read"
     | "compaction"
+    | "pinned"
     | "memory-audit"
     | "context-half"
     | "context-tight"

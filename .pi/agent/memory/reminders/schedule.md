@@ -119,6 +119,17 @@ Both append at the end of the conversation, so the system-prompt prefix stays st
   finding, a context reminder, or the outline nudge skips `maybeEmitMidRun` - the rotation keeps its cadence for
   the next step - but everything held still travels in one combined message.
 
+## Pinned memory bodies
+
+`pinned` (`PINNED_MEMORIES_REMINDER`) is not advice and not a rotation entry: it carries the bodies of memories
+marked `pinned: true`, supplied by the memory module through the `pinnedText` registration option, and refreshed
+at the same anchors as the appendix. It is held together with the armed `memory-read`/`compaction` reminder, so
+one delivery point still sends one message and the single wrapper holds. It is injected only where the armed
+reminder is - session start (including reload/resume) and the first turn after a fold - because those are the
+points the memory module re-reads the bodies; a tree navigation arms nothing and needs nothing, since the branch
+already carries the message. `PI_CODER_REMINDER=false` disables it with the rest of the module. Budget and the
+skip-not-truncate rule are in `memory-system-improvements.md`.
+
 ## Lifecycle: start, navigation, and the fold
 
 `restart()` runs at three points. Session start (including reload, resume, and fork) seeds from the branch

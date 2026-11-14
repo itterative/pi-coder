@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 
-import { parseFrontmatter, FrontmatterParseError } from "../../../src/modules/memory/frontmatter";
+import {
+    parseFrontmatter,
+    parseMemory,
+    FrontmatterParseError,
+} from "../../../src/modules/memory/frontmatter";
 import { dedent } from "./utils";
 
 describe("parseFrontmatter", () => {
@@ -53,6 +57,41 @@ describe("parseFrontmatter", () => {
                 "bad.md",
             ),
         ).toThrow(FrontmatterParseError);
+    });
+
+    it("parses pinned and keeps the body for injection", () => {
+        const { meta, body } = parseMemory(
+            dedent`
+                ---
+                name: rule
+                description: A pinned rule
+                pinned: true
+                ---
+
+                # Rule
+
+                Always do the thing.
+            `,
+            "rule.md",
+        );
+
+        expect(meta).toEqual({ name: "rule", description: "A pinned rule", pinned: true });
+        expect(body).toContain("Always do the thing.");
+    });
+
+    it("parses pinned: false as not pinned", () => {
+        const result = parseFrontmatter(
+            dedent`
+                ---
+                name: rule
+                description: A rule
+                pinned: false
+                ---
+            `,
+            "rule.md",
+        );
+
+        expect(result).toEqual({ name: "rule", description: "A rule", pinned: false });
     });
 
     it("throws when delimiters are not at the start", () => {
