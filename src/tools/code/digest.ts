@@ -2,17 +2,20 @@ import path from "node:path";
 
 import { discoverFiles, filterPathTarget, parsePathTarget, patternWithinTarget } from "./discovery";
 import {
+    counted,
     declarationLine,
     discoveryCapNote,
     filterNote,
     isFunctionLike,
     nextOffsetNote,
     renderWithinBudget,
+    scopeLabel,
 } from "./format";
 import { DEFAULT_CHAR_LIMIT, MAX_FILES, languageForPath, sizeLabel } from "./languages";
 import { loadParsedFiles } from "./load";
 import type { CodeSource } from "./source";
 import { CallTiming } from "./timing";
+import { buildUsageIndex, scopeAt } from "./usages";
 import {
     isDeclarationKind,
     type CodeDetail,
@@ -109,7 +112,15 @@ export async function runDigest(
     const languages = languagesOf(parsed);
     const kind =
         params.kind !== undefined && isDeclarationKind(params.kind) ? params.kind : undefined;
-    const rendered = parsed.map((file) => renderFile(source, file, detail, kind));
+    const rendered = await timing.measure("search", async () => {
+        const files: RenderedFile[] = [];
+
+        for (const file of parsed) {
+            files.push(await renderFile(source, file, detail, kind, signal));
+        }
+
+        return files;
+    });
     const kindHidden = rendered.reduce((total, entry) => total + entry.hidden, 0);
     const accessHidden = rendered.reduce((total, entry) => total + entry.accessHidden, 0);
     const signatureHidden = new Map<DeclarationKind, number>();
@@ -180,7 +191,7 @@ export async function runDigest(
     // A kind filter must not degrade to the directory map: the caller asked for declarations of one kind, and a map of
     // directory names answers a different question. Page the flat list instead, so `# next: offset=N` continues it.
     if (!fits && !discovery.rootIsFile && kind === undefined) {
-        const map = renderDirectoryMap(source, root, targeted.files, limit);
+        const map = renderDirectoryMap(source, root, targeted.files, limit, scope);
 
         if (map !== undefined) {
             if (offset === 0) {
@@ -225,12 +236,13 @@ export async function runDigest(
     };
 }
 
-function renderFile(
+async function renderFile(
     source: CodeSource,
     file: ParsedFile,
     detail: CodeDetail,
     kind: DeclarationKind | undefined,
-): RenderedFile {
+    signal?: AbortSignal,
+): Promise<RenderedFile> {
     const header = `${source.displayPath(file.path)} [${sizeLabel(file.lineCount)}]`;
     const total = file.all.length;
 
@@ -276,11 +288,18 @@ function renderFile(
     if (lines.length === 0) {
         const hidden = describeSignatureHides(tally.signatureHidden);
 
+        if (hidden !== "") {
+            return {
+                text: `${header}\n  # no declarations visible in signatures detail; ${hidden} hidden — use detail="full"`,
+                hidden: 0,
+                total,
+                accessHidden: tally.accessHidden,
+                signatureHidden: tally.signatureHidden,
+            };
+        }
+
         return {
-            text:
-                hidden === ""
-                    ? `${header}\n  # no declarations`
-                    : `${header}\n  # no declarations visible in signatures detail; ${hidden} hidden — use detail="full"`,
+            text: `${header}\n${await emptyMap(source, file, signal)}`,
             hidden: 0,
             total,
             accessHidden: tally.accessHidden,
@@ -318,6 +337,49 @@ interface RenderedFile {
  * No ancestor lines: the qualified name already carries the container, and an indented child whose parent was
  * filtered out would read as a tree that does not exist.
  */
+/**
+ * What a file with nothing to map says instead of "no declarations".
+ *
+ * The declaration model cannot see a script: an entrypoint is a list of calls, and `# no declarations` reads as
+ * "this file holds no structure" - the one answer that teaches an agent the tool does not apply here. So the empty
+ * case counts the call sites the file does have and names the action that lists them.
+ */
+async function emptyMap(
+    source: CodeSource,
+    file: ParsedFile,
+    signal?: AbortSignal,
+): Promise<string> {
+    const calls = await topLevelCalls(file, signal);
+
+    if (calls === 0) {
+        return "  # no declarations · no top-level statements (a re-export, a comment, or a file the parser could not read)";
+    }
+
+    const where = source.displayPath(file.path);
+
+    return `  # no declarations · ${calls} top-level call site${calls === 1 ? "" : "s"} · outline(action="flow", path="${where}") lists them`;
+}
+
+/** Call sites that belong to no declaration: the body of a script or an entrypoint. One per line, like `flow`. */
+async function topLevelCalls(file: ParsedFile, signal?: AbortSignal): Promise<number> {
+    const index = await buildUsageIndex(file, signal);
+    const lines = new Set<number>();
+
+    for (const entry of index.entries) {
+        if (entry.tag !== "call" && entry.tag !== "launch") {
+            continue;
+        }
+
+        if (scopeAt(index.scopes, entry.startIndex) !== undefined) {
+            continue;
+        }
+
+        lines.add(entry.line);
+    }
+
+    return lines.size;
+}
+
 function renderKind(
     file: ParsedFile,
     header: string,
@@ -330,9 +392,18 @@ function renderKind(
         return { text: "", hidden: total, total, accessHidden: 0, signatureHidden: new Map() };
     }
 
-    const lines = matched.map((declaration) =>
-        declarationLine(declaration, 0, { includeDefTag: isFunctionLike(declaration.kind) }),
-    );
+    // A kind filter lists members flat, so the container that the tree would have carried has to be named:
+    // `private void reset()` says nothing about which class was filtered away (`Owner::` keeps the key fact).
+    const lines = matched.map((declaration) => {
+        const row = declarationLine(declaration, 0, {
+            includeDefTag: isFunctionLike(declaration.kind),
+        });
+        const separator = declaration.qualifiedName.lastIndexOf("::");
+
+        return separator === -1
+            ? row
+            : `${declaration.qualifiedName.slice(0, separator)}::  ${row}`;
+    });
 
     return {
         text: `${header}\n${lines.join("\n")}`,
@@ -455,7 +526,7 @@ function digestHeader(
     languages: string,
     body: string,
 ): string {
-    return `# digest ${scope} · ${parsed.length} files · ${languages} · ~${body.length} chars`;
+    return `# digest ${scopeLabel(scope)} · ${counted(parsed.length, "file")} · ${languages} · ~${body.length} chars`;
 }
 
 function digestFooter(
@@ -501,6 +572,7 @@ function renderDirectoryMap(
     root: string,
     files: readonly string[],
     limit: number,
+    scope: string,
 ): string | undefined {
     const directories = new Map<
         string,
@@ -548,21 +620,15 @@ function renderDirectoryMap(
     }
 
     const displayRoot = source.displayPath(root);
+    const header = `# digest ${scopeLabel(scope)} · ${counted(files.length, "file")} · declarations exceed the ${limit}-char limit; showing the file list`;
 
     if (directories.size === 0) {
         const names = files.map((file) => path.basename(file)).toSorted();
         const shownNames = names.slice(0, 80);
-        const lines = [
-            `# digest ${displayRoot} · ${files.length} files · over character limit (~${limit} chars)`,
-            ...shownNames.map((name) => `  ${name}`),
-        ];
+        const lines = [header, ...shownNames.map((name) => `  ${name}`)];
 
         if (names.length > shownNames.length) {
             lines.push(`  # … ${names.length - shownNames.length} more file(s)`);
-        }
-
-        if (names.length > 0) {
-            lines.push(`# next: outline digest ${joinDisplay(displayRoot, names[0] ?? "")}`);
         }
 
         return lines.join("\n");
@@ -571,20 +637,20 @@ function renderDirectoryMap(
     const sorted = Array.from(directories.entries()).toSorted(
         (left, right) => right[1].count - left[1].count || left[0].localeCompare(right[0]),
     );
-    const lines = [
-        `# digest ${displayRoot} · ${files.length} files · over character limit (~${limit} chars)`,
-    ];
+    const lines = [header];
     const largest = sorted[0]?.[0];
-    const next =
+    // Not `# next:`: that marker means "this result was cut, continue it". This is a suggestion, and reusing the
+    // truncation marker for it made a complete map read as a shortened one.
+    const deeper =
         largest === undefined
             ? undefined
-            : `# next: outline digest ${joinDisplay(displayRoot, largest)}`;
+            : `# deeper: outline digest ${joinDisplay(displayRoot, largest)}`;
 
     // A map of directory names answers "where is the code" but not "which file", and a caller who asked for
     // `src/tui` is usually after one of the fifteen files sitting right there. So names are added while the budget
     // allows, most informative first: the root's own files (no subdirectory to find them in), then each directory in
     // size order. A truncated list says how many it left out, and the elided directories are one `digest` away.
-    let remaining = limit - lines[0].length - (next === undefined ? 1 : next.length + 2);
+    let remaining = limit - lines[0].length - (deeper === undefined ? 1 : deeper.length + 2);
 
     const addNames = (names: readonly string[]): void => {
         let shown = 0;
@@ -608,7 +674,7 @@ function renderDirectoryMap(
     };
 
     if (rootNames.length > 0) {
-        const summary = `.  ${rootNames.length} files`;
+        const summary = `.  ${counted(rootNames.length, "file")}`;
 
         lines.push(summary);
         remaining -= summary.length + 1;
@@ -617,15 +683,15 @@ function renderDirectoryMap(
 
     for (const [directory, entry] of sorted) {
         const languages = Array.from(entry.languages).toSorted().join(",");
-        const summary = `${directory}/  ${entry.count} files  ${languages}`;
+        const summary = `${directory}/  ${counted(entry.count, "file")}  ${languages}`;
 
         lines.push(summary);
         remaining -= summary.length + 1;
         addNames(entry.names.toSorted());
     }
 
-    if (next !== undefined) {
-        lines.push(next);
+    if (deeper !== undefined) {
+        lines.push(deeper);
     }
 
     return lines.join("\n");

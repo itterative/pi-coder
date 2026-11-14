@@ -1,7 +1,7 @@
 import type { CodeTiming } from "./timing";
 
 /** The questions the outline tool answers. */
-export type CodeAction = "digest" | "search" | "show" | "usages" | "deps";
+export type CodeAction = "digest" | "search" | "show" | "usages" | "deps" | "flow";
 
 /** How much of a declaration the caller wants. */
 export type CodeDetail = "signatures" | "full";
@@ -40,6 +40,13 @@ export const DECLARATION_KINDS = [
     "variable",
     "typeAlias",
     "macro",
+    /**
+     * A named block: a statement-level call whose name is a string literal and whose last argument is a
+     * function - `describe("outline digest", () => ...)`, `it("maps a module", async () => ...)`,
+     * `router.get("/users", (req, res) => ...)`. Not a declaration in any grammar; the shape is what makes
+     * test suites, routes, and event handlers visible to a map that otherwise stops at declarations.
+     */
+    "block",
     "heading",
     /** A Markdown frontmatter block: no name of its own, but the highest-signal prose in a memory tree. */
     "frontmatter",
@@ -98,6 +105,13 @@ export interface Declaration {
     children: Declaration[];
     /** The language id the adapter used, e.g. `cpp` or `hip`. */
     language: string;
+    /**
+     * The callee that opened a `block`, e.g. `describe`, `test.describe`, or `router.get`.
+     *
+     * Kept here rather than read back out of `signature`, so the formatter never parses an expression it did not
+     * build: a title holding a quote or a comma is ordinary prose, not a syntax error to recover from.
+     */
+    blockCallee?: string;
 }
 
 /** One parsed source file. `all` is flattened and keeps the same object identities as the `roots` tree. */

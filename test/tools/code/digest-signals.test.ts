@@ -80,18 +80,18 @@ describe("outline digest directory map", () => {
     it("names the files it is mapping, root first", async () => {
         const result = await runDigest(source(), { action: "digest", path: "src", limit: 400 });
 
-        expect(result.text).toContain("over character limit");
+        expect(result.text).toContain("declarations exceed the");
         expect(result.text).toContain(".  2 files");
         expect(result.text).toContain("gamma.ts queue.ts");
         expect(result.text).toContain("a/  2 files");
         expect(result.text).toContain("alias.ts");
-        expect(result.text).toContain("# next: outline digest src/a");
+        expect(result.text).toContain("# deeper: outline digest src/a");
     });
 
     it("drops names before it drops the map, and never leaves a partial list unlabelled", async () => {
         const result = await runDigest(source(), { action: "digest", path: "src", limit: 120 });
 
-        expect(result.text).toContain("over character limit");
+        expect(result.text).toContain("declarations exceed the");
         expect(result.text).toContain("a/  2 files");
 
         for (const line of result.text.split("\n")) {
@@ -108,7 +108,7 @@ describe("outline digest directory map", () => {
     it("leaves the visibility note off a result that shows no members", async () => {
         const result = await runDigest(source(), { action: "digest", path: "src", limit: 400 });
 
-        expect(result.text).toContain("over character limit");
+        expect(result.text).toContain("declarations exceed the 400-char limit");
         expect(result.text).not.toContain("# visibility:");
     });
 });

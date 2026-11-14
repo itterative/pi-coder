@@ -1,5 +1,6 @@
 import type { Node as SyntaxNode } from "@vscode/tree-sitter-wasm";
 
+import { stripComments } from "./text";
 import type { Access, Declaration, DeclarationKind, DeclarationRange, NameRange } from "./types";
 
 export interface DeclarationInput {
@@ -118,11 +119,7 @@ export abstract class DeclarationVisitor {
     }
 
     protected signatureBetween(startIndex: number, endIndex: number): string {
-        const text = this.source
-            .slice(startIndex, endIndex)
-            .replace(/\/\*[\s\S]*?\*\//g, " ")
-            .replace(/\/\/[^\n]*/g, " ")
-            .replace(/;\s*$/, "");
+        const text = stripComments(this.source.slice(startIndex, endIndex)).replace(/;\s*$/, "");
 
         return this.collapse(text);
     }

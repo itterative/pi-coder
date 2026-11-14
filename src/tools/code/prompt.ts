@@ -5,40 +5,56 @@
  * schemas, so this says when to reach for `outline` instead of `rg`, `grep`, or `read`. Pi wraps it in
  * an `outline_tool_guide` section while the tool is declared.
  *
- * The triggers name things the agent is already about to do (read a file, run a grep) rather than an
- * intent it would have to classify ("is this a structure question"), because a rule that asks the agent
- * to judge its own intent is the one it can always talk itself out of. The boundary is stated as a real
- * limitation instead of a preference: a guide that claims everything gets discounted, and an agent that
- * discovers the limitation through a wasted turn learns to prefer `rg`. The three literal invocations
- * carry the workflow, because an example is imitated more reliably than a rule that describes it. Triggers
- * and prose name the `action=` field rather than a bare `outline digest`, and the guide says outright that
- * this is a tool call: the earlier "run `outline digest`" phrasing read as a command line, and models tried
- * it in bash.
+ * The triggers name things the agent is already about to do (read a file, run a grep, write a test) rather than an
+ * intent it would have to classify ("is this a structure question"), because a rule that asks the agent to judge its
+ * own intent is the one it can always talk itself out of. The boundary is stated as a real limitation instead of a
+ * preference: a guide that claims everything gets discounted, and an agent that discovers the limitation through a
+ * wasted turn learns to prefer `rg`. The literal invocations carry the workflow, because an example is imitated more
+ * reliably than a rule that describes it. Triggers and prose name the `action=` field rather than a bare
+ * `outline digest`, and the guide says outright that this is a tool call: the earlier "run `outline digest`" phrasing
+ * read as a command line, and models tried it in bash.
+ *
+ * **The framing is structure, not declarations.** An agent that reads this as a declaration tool correctly concludes
+ * it does not apply to a test suite, an entrypoint, or a script — and those are exactly the files whose shape is
+ * worth one call. So the digest trigger names the files whose structure is not a declaration list, and `flow` is
+ * offered for the behaviour question a `read` would otherwise answer.
  *
  * Every claim here tracks the implementation: `search` reads names *and* doc comments *and* literal body text and
- * can append a relevance-ranked tail, `show` locates a symbol that lives in another file, and both `show` and
- * `usages` take comma-joined symbol lists. A guide that keeps a capability the tool no longer has, or drops one it
- * gained, teaches the wrong tool.
+ * can append a relevance-ranked tail, `show` locates a symbol that lives in another file and matches prose titles
+ * loosely, blocks make `describe`/`it` trees and named callbacks part of the map, and both `show` and `usages` take
+ * comma-joined symbol lists. A guide that keeps a capability the tool no longer has, or drops one it gained, teaches
+ * the wrong tool.
  */
 export function outlineGuidePrompt(): string {
     return [
         "## Outline",
         "",
-        "Four triggers, all checkable before you act. `outline` is cheaper than the alternative, not just tidier:",
+        "`outline` maps structure without reading whole files — declarations, test suites and cases, and the call sites",
+        "inside them. Every trigger below is checkable before you act. It is cheaper than the alternative, not just",
+        "tidier:",
         "",
         "- About to `read` a long file, or `read` any file just to find one declaration. Call `outline` with",
-        '  `action="digest"` first. It returns the declaration map with line ranges, so you go straight to the',
-        "  30 lines you need instead of pulling 900 into the conversation.",
+        '  `action="digest"` first. It returns the map with line ranges, so you go straight to the 30 lines you need',
+        "  instead of pulling 900 into the conversation.",
+        "- A file whose shape you do not know is the same question, and its answer is not a declaration list: `digest`",
+        '  maps a `describe`/`it` tree, a named callback block (`router.get("/users", handler)`), and a script\'s',
+        "  module constants. Test suite, entrypoint, config, script: digest it before reading it.",
         "- About to `rg`/`grep` for a declaration, or for the code that does something. Call `outline` with",
         '  `action="search"` instead: it matches declaration names, doc comments, and literal text inside bodies,',
         "  and returns kinds, signatures, and line ranges rather than matching lines, so a half-remembered name, a",
         "  remembered description, or a remembered error string all land.",
         '- Need one symbol\'s body. `action="show"` returns that block with its doc comment, not the file. The',
         "  file does not have to be the right one: a symbol that lives elsewhere is reported with its real",
-        "  location.",
+        "  location. A heading or a test title also matches by prefix and substring, so a remembered phrase is",
+        "  enough.",
+        '- Need what a function, a file, or a script *does*. `action="flow"` lists its call sites grouped by scope,',
+        "  which is the question behind reading a body to see what it calls. Like `usages` it is syntactic, not a",
+        "  call graph.",
         '- Need what a file imports, or who imports it. `action="deps"` takes one file and lists its imports plus the',
-        "  files that import it, with unresolved paths separated from external modules. It is file-level and",
-        "  syntactic: a call graph is `usages`, and re-exports or dynamic `import()` are not followed.",
+        "  files that import it, with unresolved paths separated from external modules.",
+        "",
+        "Before writing a test, `digest` the test file: the neighbouring cases are the house style, and the map is one",
+        "call.",
         "",
         "`outline` is a tool call, not a shell command: it takes structured arguments, and",
         "`outline digest src/auth` typed into a terminal is not a command. Unfamiliar code is",
@@ -48,6 +64,7 @@ export function outlineGuidePrompt(): string {
         '    outline(action="digest", path="src/auth")',
         '    outline(action="show", query="Auth::login")',
         '    outline(action="usages", query="Auth::login", kind="call")',
+        '    outline(action="flow", path="src/auth/socket.ts")',
         '    outline(action="deps", path="src/auth/socket.ts")',
         "",
         'One call can carry several symbols (`query="Auth::login, Auth::logout"`); selectors split at',
@@ -76,8 +93,8 @@ export function outlineGuidePrompt(): string {
         "literally, so a tree git ignores is still searchable, and the first search of a tree with no index starts",
         "one in the background — that is what makes a memory tree answer by content, not by heading title.",
         "",
-        "`usages` finds candidates, not a call graph: it is syntactic, so it does not resolve overloads, generics,",
-        "macros, or dynamic dispatch. When output ends with `# next: offset=N`, call again with the same",
+        "`usages` and `flow` find candidates, not a call graph: both are syntactic, so they do not resolve overloads,",
+        "generics, macros, or dynamic dispatch. When output ends with `# next: offset=N`, call again with the same",
         "parameters and that offset.",
         "",
         "Rows tagged `[related]` were ranked by relevance because name and doc matches were thin; they are",

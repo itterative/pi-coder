@@ -11,6 +11,7 @@ import {
     lineRange,
     nextOffsetNote,
     renderWithinBudget,
+    scopeLabel,
     shortLine,
     shortSignature,
     type BudgetedText,
@@ -267,6 +268,10 @@ export async function runSearch(
         tier: TIER_BODY,
         body: { ...hit.evidence, count: hit.count },
     }));
+    const folded = foldBodyRows(literal, bodyRows);
+    const literalRows = folded.literal;
+    const standaloneBody = folded.body;
+    const bodyMatches = standaloneBody.length;
     const kindHidden = literalAll.length - literal.length + (bodyAll.length - bodyKept.length);
     const fuzzy =
         literal.length === 0
@@ -278,13 +283,13 @@ export async function runSearch(
     // channel answers better than a doc tier that merely saw every word somewhere, so there its rows lead. Body
     // evidence is literal and keeps its place ahead of the related rows for the same reason.
     const strongMatch =
-        literal.some((hit) => hit.tier <= TIER_FRONTMATTER_PHRASE) || bodyRows.length > 0;
+        literalRows.some((hit) => hit.tier <= TIER_FRONTMATTER_PHRASE) || bodyMatches > 0;
     const leads = leadsWithRelated(strongMatch);
     // A typo of an identifier is precise evidence too, so a fuzzy result keeps priority over related rows; a
     // lexical-led answer still takes a related tail when it is thin, exactly as before.
     const wantsRelated =
         fuzzyHits.length === 0 &&
-        (leads || wantsTail(literal.length + bodyRows.length, docMatches));
+        (leads || wantsTail(literalRows.length + bodyMatches, docMatches));
     const related = wantsRelated
         ? (
               await timing.measure("tail", () =>
@@ -296,18 +301,22 @@ export async function runSearch(
                       root,
                       query,
                       discovery.truncated,
-                      [...literal, ...bodyRows, ...fuzzyHits],
+                      [...literalRows, ...standaloneBody, ...fuzzyHits],
                       signal,
                   ),
               )
           ).filter((hit) => matchesKind(hit.declaration))
         : [];
     const relatedKeys = new Set(related.map((hit) => declarationKey(hit.file, hit.declaration)));
-    const lexicalRest = [...literal, ...bodyRows, ...fuzzyHits].filter(
+    const lexicalRest = [...literalRows, ...standaloneBody, ...fuzzyHits].filter(
         (hit) => !relatedKeys.has(declarationKey(hit.file, hit.declaration)),
     );
     const hits = leads ? relatedLedPage(related, lexicalRest) : [...lexicalRest, ...related];
     const total = hits.length;
+    // A related row is a guess ranked by similarity, so it must not be counted as a match: "3 matches" over three
+    // guesses is the one number in this output an agent will repeat as a fact.
+    const literalTotal = hits.filter((hit) => hit.tier !== TIER_RELATED).length;
+    const displaced = displacedNote(source, leads, hits, literalTotal);
     const approximate = fuzzyHits.length > 0;
     const filter = filterNote({
         path: target.pattern,
@@ -343,7 +352,7 @@ export async function runSearch(
         parsed.length,
         languages,
         query,
-        total,
+        literalTotal,
         approximate,
         docMatches - frontmatterMatches,
         frontmatterMatches,
@@ -360,8 +369,9 @@ export async function runSearch(
         shown: total,
         approximateTotal: fuzzy?.total ?? 0,
         relatedMatches: related.length,
-        bodyMatches: bodyRows.length,
+        bodyMatches: bodyMatches,
         bodyWithheld,
+        displacedLiteral: displaced,
         filter,
         within,
         more: moreNote(source, hits, rows, fitted),
@@ -377,7 +387,7 @@ export async function runSearch(
         files: parsed.length,
         parseErrors,
         truncated: discovery.truncated || fitted.truncated,
-        matches: total,
+        matches: literalTotal,
     };
 }
 
@@ -763,18 +773,10 @@ function compareHits(left: SearchHit, right: SearchHit): number {
 function renderHit(source: CodeSource, hit: SearchHit): string {
     const declaration = hit.declaration;
     const location = `${source.displayPath(hit.file.path)}:${lineRange(declaration.range)}`;
-    const signature =
-        declaration.kind === "frontmatter" ? "" : shortSignature(declaration.signature, 240);
     const tag = declarationTag(declaration);
     const channel = channelTag(hit);
     const approximate = hit.distance === undefined ? "" : ` ~${hit.distance}`;
-
-    const columns = [
-        location,
-        kindLabel(declaration.kind),
-        declaration.qualifiedName,
-        signature,
-    ].filter((column) => column.length > 0);
+    const columns = rowColumns(declaration, location).filter((column) => column.length > 0);
     const row = `${columns.join("  ")}${tag}${channel}${approximate}`;
 
     if (hit.body !== undefined) {
@@ -789,6 +791,120 @@ function renderHit(source: CodeSource, hit: SearchHit): string {
     }
 
     return row;
+}
+
+/**
+ * The columns a row prints.
+ *
+ * A block is named by the call that opened it and the title it was given: `block  outline flow::caps one scope's
+ * rows and counts the rest  it("caps one scope's rows and counts the rest")` says one thing three times, and the
+ * `::` path reads as a C++ qualifier on prose. The parent scope stays, in parentheses, because two suites may share
+ * a title.
+ */
+function rowColumns(declaration: Declaration, location: string): string[] {
+    const callee = declaration.blockCallee;
+
+    if (callee !== undefined) {
+        const qualified = declaration.qualifiedName;
+        const separator = qualified.lastIndexOf("::");
+        const parent = separator === -1 ? "" : qualified.slice(0, separator);
+
+        return [
+            location,
+            callee,
+            `"${declaration.name}"`,
+            parent.length === 0 ? "" : `(${parent})`,
+        ];
+    }
+
+    const signature =
+        declaration.kind === "frontmatter" ? "" : shortSignature(declaration.signature, 240);
+
+    return [location, kindLabel(declaration.kind), declaration.qualifiedName, signature];
+}
+
+/**
+ * A literal row the related-led page pushed below its guesses.
+ *
+ * The related-led order is a measured decision (a plain doc tier answers prose queries worse than similarity does), so
+ * it stays. What must not happen is the one row with real evidence being paged out unseen, so the footer names it.
+ * Only when related rows actually lead: a literal-led page has the row where it belongs.
+ */
+function displacedNote(
+    source: CodeSource,
+    leads: boolean,
+    hits: readonly SearchHit[],
+    literalTotal: number,
+): string | undefined {
+    if (!leads || literalTotal === 0) {
+        return undefined;
+    }
+
+    return displacedLiteral(
+        source,
+        literalTotal,
+        hits.find((hit) => hit.tier !== TIER_RELATED),
+    );
+}
+
+function displacedLiteral(
+    source: CodeSource,
+    count: number,
+    first: SearchHit | undefined,
+): string | undefined {
+    if (first === undefined) {
+        return undefined;
+    }
+
+    const where = `${source.displayPath(first.file.path)}:${lineRange(first.declaration.range)}`;
+    const label = first.declaration.blockCallee ?? kindLabel(first.declaration.kind);
+    const noun = count === 1 ? "literal row follows" : `${count} literal rows follow`;
+
+    return `# also: ${noun} the related guesses · ${where} ${label} ${first.declaration.qualifiedName}${channelTag(first)}`;
+}
+
+/**
+ * Body rows merged into the rows that already list their declaration.
+ *
+ * A body row names the declaration that contains the text. When that declaration is on the page by name, the row
+ * restates it (`deps.test.ts:49-63` appeared twice, once with evidence), so the evidence moves onto the listed row.
+ * When the evidence instead belongs to a *descendant* that is listed, the row would put a case's line under its
+ * suite's heading, so it goes. Both need the file as well as the line: line 3 of another file is not inside this one.
+ */
+function foldBodyRows(
+    literal: readonly SearchHit[],
+    bodyRows: readonly SearchHit[],
+): { literal: SearchHit[]; body: SearchHit[] } {
+    const listed = new Map(
+        literal.map((hit) => [declarationKey(hit.file, hit.declaration), { ...hit }]),
+    );
+    const kept: SearchHit[] = [];
+
+    for (const row of bodyRows) {
+        const own = listed.get(declarationKey(row.file, row.declaration));
+
+        if (own !== undefined) {
+            own.body ??= row.body;
+
+            continue;
+        }
+
+        const line = row.body?.line;
+        const insideListed =
+            line !== undefined &&
+            Array.from(listed.values()).some(
+                (hit) =>
+                    hit.file.path === row.file.path &&
+                    hit.declaration.range.startLine <= line &&
+                    line <= hit.declaration.range.endLine,
+            );
+
+        if (!insideListed) {
+            kept.push(row);
+        }
+    }
+
+    return { literal: Array.from(listed.values()), body: kept };
 }
 
 function channelTag(hit: SearchHit): string {
@@ -808,6 +924,11 @@ function channelTag(hit: SearchHit): string {
 }
 
 function declarationTag(declaration: Declaration): string {
+    // A block always has a body, so `[def]` on every suite and case would be noise where a class's tag is a fact.
+    if (declaration.kind === "block") {
+        return "";
+    }
+
     if (!isFunctionLike(declaration.kind) && !isContainer(declaration.kind)) {
         return "";
     }
@@ -836,19 +957,25 @@ function headerFor(
         relatedMatches,
     );
 
-    return `# search ${quotedForMessage(query)} in ${scope} · ${fileCount(fileTotal)} · ${languages} · ${summary}`;
+    return `# search ${quotedForMessage(query)} in ${scopeLabel(scope)} · ${fileCount(fileTotal)} · ${languages} · ${summary}`;
 }
 
-/** Name, doc, body, and relevance channels are counted separately so a reader can tell which one produced a row. */
+/**
+ * Name, doc, body, and relevance channels are counted separately so a reader can tell which one produced a row.
+ *
+ * `literal` excludes the related rows on purpose. Counting them made `3 matches` out of three similarity guesses, and
+ * a caller reads that number as "the identifier exists"; with no literal row the summary says so instead.
+ */
 function matchSummary(
-    total: number,
+    literal: number,
     docMatches: number,
     frontmatterMatches: number,
     bodyMatches: number,
     approximate: boolean,
     relatedMatches: number,
 ): string {
-    const matches = `${total} ${total === 1 ? "match" : "matches"}`;
+    const matches =
+        literal === 0 ? "no literal matches" : `${literal} ${literal === 1 ? "match" : "matches"}`;
     const channels: string[] = [];
 
     if (docMatches > 0) {
@@ -864,12 +991,12 @@ function matchSummary(
     }
 
     if (relatedMatches > 0) {
-        channels.push(`${relatedMatches} related`);
+        channels.push(`${relatedMatches} related guess${relatedMatches === 1 ? "" : "es"}`);
     }
 
     if (approximate) {
         if (channels.length === 0) {
-            return `no name or doc matches · ${total} approximate`;
+            return `no name or doc matches · ${literal} approximate`;
         }
 
         channels.push("approximate");
@@ -887,6 +1014,7 @@ function footerFor(options: {
     relatedMatches: number;
     bodyMatches: number;
     bodyWithheld: number;
+    displacedLiteral: string | undefined;
     filter: string | undefined;
     within: string | undefined;
     more: string | undefined;
@@ -909,6 +1037,10 @@ function footerFor(options: {
         footer.push(
             `# body: ${counted(options.bodyWithheld, "more declaration")} withheld; a name or doc match already leads, so the page keeps the strongest rows`,
         );
+    }
+
+    if (options.displacedLiteral !== undefined) {
+        footer.push(options.displacedLiteral);
     }
 
     if (options.more !== undefined) {
@@ -937,6 +1069,13 @@ function footerFor(options: {
 
     if (options.discoveryTruncated) {
         footer.push(discoveryCapNote());
+    }
+
+    // One character is a substring request, not a name: 155 rows is the answer to a different question.
+    if (options.query.raw.replace(/"/g, "").length === 1) {
+        footer.push(
+            "# note: a one-character query matches by substring only; widen it before trusting the row count",
+        );
     }
 
     return footer;
@@ -972,7 +1111,8 @@ function moreNote(
     const next = hits[firstUnseen];
     const where = next === undefined ? "" : `, next in ${source.displayPath(next.file.path)}`;
 
-    return `# more: ${unseen} of ${rows.length} match(es) on later pages${where}`;
+    // "rows", not "matches": with related guesses on the page a match count here contradicts the header.
+    return `# more: ${unseen} of ${rows.length} row(s) on later pages${where}`;
 }
 
 function languagesOf(files: readonly ParsedFile[]): string {

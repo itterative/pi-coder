@@ -13,6 +13,7 @@ import { outlineGuidePrompt } from "./prompt";
 import { discoverFiles, parsePathTarget } from "./discovery";
 import { runDeps } from "./deps";
 import { runDigest } from "./digest";
+import { runFlow } from "./flow";
 import { DEFAULT_CHAR_LIMIT, MIN_CHAR_LIMIT } from "./languages";
 import { loadParsedFiles } from "./load";
 import { renderOutlineCall, renderOutlineResult } from "./render";
@@ -58,10 +59,11 @@ import { runUsages } from "./usages";
 /**
  * `outline` — structural navigation without reading whole files.
  *
- * The model-facing surface is deliberately one tool with five questions: `digest` to orient in a module,
+ * The model-facing surface is deliberately one tool with six questions: `digest` to orient in a module,
  * `search` to find declarations by partial name, doc comment, or literal body text, `show` to extract a named
- * declaration, `usages` to find syntactic occurrences, and `deps` for one file's imports and dependents. Every
- * filesystem read goes through `CodeSource`, so a container session answers from the same view as `bash` and `read`.
+ * declaration, `usages` to find syntactic occurrences, `deps` for one file's imports and dependents, and `flow` for
+ * the call sites of one file or scope. Every filesystem read goes through `CodeSource`, so a container session
+ * answers from the same view as `bash` and `read`.
  */
 export default function registerCodeTool(pi: ExtensionAPI, container?: ContainerState): void {
     pi.registerTool({
@@ -70,20 +72,22 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
         description:
             "Inspect code structure without reading whole files. Supports C/C++/HIP, JavaScript/TypeScript " +
             "(JSX/TSX), Java, C#, Go, Rust, Python, PHP, Ruby, and Markdown headings; other file types are " +
-            "skipped. Output is character-limited, and a cut result ends with # next: offset=N and the lines it " +
+            "skipped. Test suites and other named callback blocks are mapped like declarations. Output is " +
+            "character-limited, and a cut result ends with # next: offset=N and the lines it " +
             "left. For a body over ~40 lines the span is cheaper: every header carries path:start-end, so digest " +
             "or show locates it and one read offset=start limit=n fetches it. `search` also matches literal text " +
             "inside declaration bodies ([body] rows, one row per containing declaration); line-level hits, " +
-            "regex, and counts stay with rg. `deps` reports one file's imports and the files that import it.",
+            "regex, and counts stay with rg. `deps` reports one file's imports and the files that import it; " +
+            "`flow` lists a file's or a scope's call sites by scope.",
         promptSnippet:
-            "Read code by declaration: digest a file, search names/docs/body text, show a body, find usages. " +
-            "Prefer over rg/read.",
+            "Map code before reading: digest a file (declarations, test suites, scripts), search names/docs/body " +
+            "text, show a body, flow its calls, find usages. Prefer over rg/read.",
         parameters: Type.Object({
             action: Type.Unsafe<CodeAction>({
                 type: "string",
-                enum: ["digest", "search", "show", "usages", "deps"],
+                enum: ["digest", "search", "show", "usages", "deps", "flow"],
                 description:
-                    "digest maps a file or directory; search finds declarations by name, doc text, or literal body text, with a typo fallback; show extracts named symbols and pairs headers with definitions; usages lists syntactic occurrences; deps lists one file's imports and the files that import it",
+                    "digest maps a file or directory; search finds declarations by name, doc text, or literal body text, with a typo fallback; show extracts named symbols and pairs headers with definitions; usages lists syntactic occurrences; deps lists one file's imports and the files that import it; flow lists the call sites of a file or scope, grouped by the scope they belong to",
             }),
             path: Type.Optional(
                 Type.String({
@@ -435,6 +439,20 @@ async function runAction(
         }
         case "deps": {
             const result = await runDeps(source, params, signal, timing);
+
+            return {
+                text: result.text,
+                details: {
+                    ...base,
+                    files: result.files,
+                    matches: result.matches,
+                    parseErrors: result.parseErrors,
+                    truncated: result.truncated,
+                },
+            };
+        }
+        case "flow": {
+            const result = await runFlow(source, params, signal, timing);
 
             return {
                 text: result.text,

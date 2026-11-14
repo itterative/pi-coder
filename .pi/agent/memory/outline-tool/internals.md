@@ -34,6 +34,11 @@ keep_updated: true
   or worker error falls back to inline parsing, and small files never pay the startup cost.
 - **Loops yield.** `common/async.ts`'s `yieldToEventLoop` sits between parsed files and at index/search boundaries
   with `AbortSignal` checks, so a long scan does not starve the TUI.
+- **A search-triggered index refresh runs on the CPU by design.** That path pins `device: "cpu"` and
+  `refreshConcurrency()` (cores/2, capped) because it runs while the user is working, and borrowing VRAM then is not
+  defensible; a foreground build uses `devicePreference("build")`, which is `auto` and takes the GPU when there is
+  one. The idle refresh omits `device` and inherits `auto`. So a large delta is genuinely slower than a purge +
+  rebuild — that is a deliberate trade, not a regression. Numbers: `outline-tool/models.md`.
 
 ## Adding a language
 

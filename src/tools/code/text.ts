@@ -10,6 +10,99 @@ export function normalizeText(text: string): string {
 }
 
 /**
+ * A source slice with comments removed and string literals left alone.
+ *
+ * A signature is a *slice*, not a syntax tree, so a regex cannot tell a comment from a URL or a glob. The old
+ * block-comment pattern ate everything from `` `${directory}/**` `` to the next closing marker in the same array
+ * literal, which is how a digest row came out with no slashes and unbalanced quotes — silently wrong text, not a
+ * cosmetic cut. A scanner that tracks quotes and escapes is the whole distinction a signature needs.
+ *
+ * A marker only starts a comment when the character before it is whitespace, the start of the slice, or closing
+ * punctuation. That is what keeps the `//` inside a regex literal (`/a\/\//`) or a path fragment from swallowing the
+ * rest of the signature; a comment glued directly to an identifier is left as text, which is honest and rare.
+ *
+ * Hash comments are not stripped: no adapter strips them today, and `#` is also a C/C++ preprocessor marker.
+ */
+export function stripComments(text: string): string {
+    const opensComment = new Set([
+        "",
+        " ",
+        "\t",
+        "\n",
+        "\r",
+        ";",
+        "{",
+        "}",
+        "(",
+        ")",
+        "[",
+        "]",
+        ",",
+    ]);
+    let out = "";
+    let index = 0;
+
+    while (index < text.length) {
+        const character = text[index];
+
+        if (character === '"' || character === "'" || character === "`") {
+            const end = literalEnd(text, index);
+
+            out += text.slice(index, end);
+            index = end;
+
+            continue;
+        }
+
+        const before = index === 0 ? "" : (text[index - 1] ?? "");
+
+        if (character === "/" && text[index + 1] === "*" && opensComment.has(before)) {
+            const end = text.indexOf("*/", index + 2);
+
+            out += " ";
+            index = end === -1 ? text.length : end + 2;
+
+            continue;
+        }
+
+        if (character === "/" && text[index + 1] === "/" && opensComment.has(before)) {
+            const end = text.indexOf("\n", index + 2);
+
+            index = end === -1 ? text.length : end;
+
+            continue;
+        }
+
+        out += character;
+        index += 1;
+    }
+
+    return out;
+}
+
+/** One past the closing quote of the literal that starts at `start`, or the end of the text. */
+function literalEnd(text: string, start: number): number {
+    const quote = text[start];
+    let index = start + 1;
+
+    while (index < text.length) {
+        if (text[index] === "\\") {
+            index += 2;
+
+            continue;
+        }
+
+        if (text[index] === quote) {
+            return index + 1;
+        }
+
+        index += 1;
+    }
+
+    return text.length;
+}
+
+/**
  * Version tag for the text a declaration is embedded as.
  *
  * It is part of every embedding key, so changing the text shape (fields, separators, prefix) invalidates the

@@ -121,10 +121,10 @@ describe("outline digest", () => {
             limit: 20,
         });
 
-        expect(result.text).toContain("over character limit (~20 chars)");
+        expect(result.text).toContain("declarations exceed the 20-char limit");
         expect(result.text).toContain("a.cpp");
         expect(result.text).toContain("b.cpp");
-        expect(result.text).toContain("# next: outline digest src/a.cpp");
+        expect(result.text).not.toContain("# next:");
         expect(result.truncated).toBe(true);
     });
 
@@ -163,7 +163,7 @@ describe("outline digest", () => {
             limit: 200,
         });
 
-        expect(result.text).toContain("over character limit");
+        expect(result.text).toContain("declarations exceed the");
         expect(result.text).toContain("src/");
         expect(result.truncated).toBe(true);
     });

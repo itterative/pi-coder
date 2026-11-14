@@ -107,7 +107,7 @@ describe("outline output offsets", () => {
         const result = renderWithinBudget("H", ["x".repeat(200)], 2);
 
         expect(result.text).toContain(
-            "# … next line needs about 202 chars; raise limit to at least 202",
+            "# … the next block needs about 202 chars; raise limit to at least 202 to show it, or continue with offset=",
         );
         expect(result.nextOffset).toBeUndefined();
     });
@@ -134,7 +134,7 @@ describe("outline output offsets", () => {
 
         expect(result.text).toContain("void beta()");
         expect(result.text).toContain("void gamma()");
-        expect(result.text).not.toContain("over character limit");
+        expect(result.text).not.toContain("declarations exceed the");
         expect(result.truncated).toBe(true);
     });
 

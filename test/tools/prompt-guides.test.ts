@@ -73,6 +73,11 @@ describe("tool guides contributed by the tools themselves", () => {
 
         const sections = event.systemPromptOptions.sections;
         expect(sections.outline_tool_guide).toContain("## Outline");
+        // The framing is structure, not declarations: a guide that reads as a declaration tool is correctly ignored
+        // for a test suite or an entrypoint, which are the files whose shape is worth one call.
+        expect(sections.outline_tool_guide).toContain("maps structure without reading whole files");
+        expect(sections.outline_tool_guide).toContain("`describe`/`it` tree");
+        expect(sections.outline_tool_guide).toContain('action="flow"');
         // The body channel has to be stated, including its granularity and its shape gate: a caller who has just
         // read that search does semantic retrieval will otherwise expect line-level hits or a single-word scan.
         expect(sections.outline_tool_guide).toContain("literal body text");

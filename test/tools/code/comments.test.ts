@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { commentSyntaxFor, commentTextIn } from "../../../src/tools/code/comments";
 import { clearCodeCache, loadParsedFile } from "../../../src/tools/code/load";
-import { embedTextOf } from "../../../src/tools/code/text";
+import { embedTextOf, stripComments } from "../../../src/tools/code/text";
 import type { ParsedFile } from "../../../src/tools/code/types";
 import { MemoryCodeSource } from "../../helpers/code-source";
 
@@ -64,6 +64,35 @@ describe("outline comment extraction", () => {
         expect(commentTextIn(source, 0, source.length, syntax!, 100).length).toBeLessThanOrEqual(
             100,
         );
+    });
+});
+
+describe("signature text", () => {
+    it("removes comments without eating a glob or a URL in a string", () => {
+        const globs = 'const G: readonly string[] = [...DIRS, "cmake-build-*/**", "moc_*/**"];';
+        const url = 'const u = "https://example.com//x";';
+        const regex = "const re = /a\\/\\//;";
+        const commented = "void f(int a /* count */, int b);";
+
+        expect(stripComments(globs)).toBe(globs);
+        expect(stripComments(url)).toBe(url);
+        expect(stripComments(regex)).toBe(regex);
+        expect(stripComments(commented).replace(/\s+/g, " ")).toBe("void f(int a , int b);");
+    });
+
+    it("keeps a signature whose initializer holds a glob intact", async () => {
+        const file = await parse(
+            "src/languages.ts",
+            `export const DEFAULT_IGNORE_GLOBS: readonly string[] = [
+    ...Array.from(DIRECTORIES, (directory) => \`\${directory}/**\`),
+    "cmake-build-*/**",
+];
+`,
+        );
+        const declaration = file.all.find((candidate) => candidate.name === "DEFAULT_IGNORE_GLOBS");
+
+        expect(declaration?.signature).toContain("`${directory}/**`");
+        expect(declaration?.signature).toContain('"cmake-build-*/**"');
     });
 });
 

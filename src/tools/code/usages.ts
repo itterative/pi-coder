@@ -13,6 +13,7 @@ import {
     filterNote,
     nextOffsetNote,
     renderWithinBudget,
+    scopeLabel,
     shortLine,
     splitSymbolList,
 } from "./format";
@@ -97,7 +98,15 @@ const SCOPE_KINDS = new Set([
     "constructor",
     "destructor",
     "operator",
+    // A block is a scope for one reason: a call inside a suite belongs to that suite's title, and reporting it
+    // under `<file scope>` would be a row a reader cannot place. Test bodies are the case this exists for.
+    "block",
 ]);
+
+/** Whether a declaration kind owns a body that usages and flow attribute calls to. */
+export function isScopeKind(kind: Declaration["kind"]): boolean {
+    return SCOPE_KINDS.has(kind);
+}
 
 /** The identifier index is tied to the cached ParsedFile object, so cache eviction releases it with the file. */
 const usageIndexes = new WeakMap<ParsedFile, UsageIndex>();
@@ -138,11 +147,12 @@ export async function runUsages(
     if (discovery.files.length === 0) {
         return {
             text: [
-                `# no usages found for ${requested.join(", ")} in ${scope} · ${target.pattern === undefined ? "no supported files" : "no files match"}`,
-                filter ?? "",
+                `# no usages found for ${requested.join(", ")} in ${scopeLabel(scope)} · ${target.pattern === undefined ? "no supported files" : "no files match"}`,
+                widenNote(scope, requested.join(", ")),
+                filter,
                 discovery.truncated ? discoveryCapNote() : "",
             ]
-                .filter((line) => line.length > 0)
+                .filter((line): line is string => line !== undefined && line.length > 0)
                 .join("\n"),
             files: 0,
             parseErrors: 0,
@@ -593,6 +603,20 @@ function pushChildren(stack: SyntaxNode[], node: SyntaxNode): void {
     }
 }
 
+/**
+ * A zero-hit result inside a subtree should name the wider search.
+ *
+ * `show` already looks elsewhere for a missing symbol; `usages` used to stop at "no usages found in src/x", which
+ * reads as "nobody calls this" when the caller had simply narrowed the path. The note is one line and no extra scan.
+ */
+function widenNote(scope: string, query: string): string | undefined {
+    if (scope === "." || scope.length === 0) {
+        return undefined;
+    }
+
+    return `# next: outline(action="usages", path=".", query="${query}") searches the whole tree`;
+}
+
 function renderSection(
     source: CodeSource,
     raw: string,
@@ -610,7 +634,13 @@ function renderSection(
     }
 
     if (collected.files.length === 0) {
-        headerNotes.push(`# no usages found in ${rootDisplay}`);
+        headerNotes.push(`# no usages found in ${scopeLabel(rootDisplay)}`);
+
+        const widen = widenNote(rootDisplay, raw);
+
+        if (widen !== undefined) {
+            headerNotes.push(widen);
+        }
     }
 
     const body: string[] = [];
@@ -730,7 +760,13 @@ function contains(ancestor: SyntaxNode, node: SyntaxNode): boolean {
     return ancestor.startIndex <= node.startIndex && node.endIndex <= ancestor.endIndex;
 }
 
-function scopeFor(scopes: readonly Declaration[], index: number): string {
+/**
+ * The innermost scope a byte offset belongs to, as a declaration.
+ *
+ * Exported because `flow` groups call sites the same way `usages` does; two answers to "which scope is this"
+ * drifting apart would show the same call under different headings in two neighbouring outputs.
+ */
+export function scopeAt(scopes: readonly Declaration[], index: number): Declaration | undefined {
     for (let position = scopes.length - 1; position >= 0; position -= 1) {
         const declaration = scopes[position];
 
@@ -739,11 +775,15 @@ function scopeFor(scopes: readonly Declaration[], index: number): string {
             declaration.range.startIndex <= index &&
             index < declaration.range.endIndex
         ) {
-            return declaration.qualifiedName;
+            return declaration;
         }
     }
 
-    return "";
+    return undefined;
+}
+
+function scopeFor(scopes: readonly Declaration[], index: number): string {
+    return scopeAt(scopes, index)?.qualifiedName ?? "";
 }
 
 function matchesFilter(tag: UsageTag, filter: UsageKind): boolean {

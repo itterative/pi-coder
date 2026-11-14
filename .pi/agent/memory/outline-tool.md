@@ -1,6 +1,6 @@
 ---
 name: outline-tool
-description: The `outline` tool - digest/search/show/usages/deps across ten languages, with body text, path patterns, and kind filters.
+description: The `outline` tool - digest/search/show/usages/deps/flow, `block` titles for tests and routes, body text, patterns, kind filters.
 category: architecture
 priority: 7
 keep_updated: true
@@ -9,7 +9,9 @@ keep_updated: true
 # `outline` tool
 
 `digest` maps a file or directory, `search` finds declarations by partial name, `show` returns exact source for
-named declarations, `usages` lists syntactic occurrences, and `deps` reports one file's imports and dependents.
+named declarations, `usages` lists syntactic occurrences, `deps` reports one file's imports and dependents, and
+`flow` lists the call sites of a file or scope by scope. Test suites and routes are visible because a `block` kind
+covers a statement-level call with a literal name and a callback body.
 Registered from `src/index.ts`; design notes: `src/tools/code/README.md`.
 
 ## Invariants
@@ -25,6 +27,8 @@ Registered from `src/index.ts`; design notes: `src/tools/code/README.md`.
   (`outline-tool/actions.md`).
 - **Routing lives in an `outline_tool_guide` section, not in the description** — and the limitation it states must
   be the literal one (`outline-tool/actions.md`).
+- **Prose has a name of its own.** A Markdown heading and a `block` title match a selector by prefix and substring,
+  reporting every candidate; a symbol still matches exactly (`outline-tool/blocks-and-flow.md`).
 
 ## Defaults
 
@@ -36,6 +40,9 @@ including `[huge]` files, the directory map, and heading matching: `outline-tool
 
 - `outline-tool/actions.md` — per-action output semantics: detail modes, the directory map, heading and comma
   matching, one-row-per-line `usages`, offset cuts, narrowing filters, and the guide's routing rules.
+- `outline-tool/blocks-and-flow.md` — the `block` kind (the literal-plus-callback discriminator, what it rejects, and
+  the identity/container/tag rules it must keep), the `flow` action's scope ownership and caps, and the digest
+  empty state.
 - `outline-tool/internals.md` — source seam and confinement, the parse-buffer/IR pipeline, the parsed-file cache,
   the large-file worker, yielding, and how to add a language.
 - `outline-tool/search.md` — search tiers, BM25 parameters, the semantic tail, artifact/index layout, build cost.

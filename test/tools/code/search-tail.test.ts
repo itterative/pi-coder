@@ -96,9 +96,12 @@ describe("outline search relevance tail", () => {
             semanticRanking("promote"),
         );
 
-        expect(result.matches).toBe(1);
+        // A related row is a similarity guess, so it is not a match: the header has to say so, or an agent reads
+        // "1 match" as proof the identifier exists.
+        expect(result.matches).toBe(0);
+        expect(result.text).toContain("no literal matches");
         expect(result.text).toContain("[related]");
-        expect(result.text).toContain("1 related");
+        expect(result.text).toContain("1 related guess");
         expect(result.text).toContain(
             "# related: ranked by term overlap and, when the embedding index is warm, similarity",
         );
@@ -284,6 +287,10 @@ describe("outline search related-led page", () => {
         expect(weakest).toBeGreaterThanOrEqual(0);
         expect(literal).toBeLessThan(weakest);
         expect(result.text).toContain("[related]");
+        // The order is a measured decision, but a literal row below the guesses is never silent.
+        expect(result.text).toContain(
+            "# also: literal row follows the related guesses · src/hint.ts:2-4",
+        );
     });
 });
 

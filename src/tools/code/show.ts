@@ -7,15 +7,16 @@ import {
     patternWithinTarget,
 } from "./discovery";
 import {
+    declarationHeading,
     declarationLine,
     filterNote,
     headingMatch,
     type HeadingMatch,
     isContainer,
     isFunctionLike,
-    kindLabel,
     pathRange,
     parseSelector,
+    scopeLabel,
     selectorHintIsPartial,
     shortLine,
     renderWithinBudget,
@@ -166,7 +167,7 @@ export async function runShow(
         (note): note is string => note !== undefined,
     );
     const header = [
-        `# show ${scope} ${requested.join(", ")}`,
+        `# show ${scopeLabel(scope)} ${requested.join(", ")}`,
         parseErrors > 0 ? `parse: ${parseErrors} error(s)` : "",
         discovery.truncated ? "file list truncated" : "",
     ]
@@ -253,7 +254,7 @@ function legendFor(
         }
 
         return [
-            `#   ${pathRange(source.displayPath(file.path), declaration.range)} · ${kindLabel(declaration.kind)} ${declaration.qualifiedName}`,
+            `#   ${pathRange(source.displayPath(file.path), declaration.range)} · ${declarationHeading(declaration)}`,
         ];
     });
 }
@@ -348,10 +349,11 @@ function findHeadings(files: readonly ParsedFile[], selector: SymbolSelector): F
 }
 
 /**
- * Name the headings that matched by a remembered piece of their title.
+ * Name the prose that matched by a remembered piece of its title.
  *
  * Without the note a substring hit and an exact one render identically, and the caller has no way to tell that the
- * title it is looking at is not the title it asked for.
+ * title it is looking at is not the title it asked for. The noun follows the kind: a test case is named by a title,
+ * a Markdown section by a heading.
  */
 function headingTextNote(
     source: CodeSource,
@@ -364,6 +366,7 @@ function headingTextNote(
         return undefined;
     }
 
+    const noun = loose.every(([declaration]) => declaration.kind === "block") ? "title" : "heading";
     const examples = loose.slice(0, 3).map(([declaration, match]) => {
         const file = fileOf.get(declaration);
         const where =
@@ -374,7 +377,7 @@ function headingTextNote(
         return `${where}${shortLine(declaration.name, 80)} (${match} of the title)`;
     });
 
-    return `# heading: ${loose.length} matched by title text, not the full title: ${examples.join(" · ")}`;
+    return `# ${noun}: ${loose.length} matched by title text, not the full title: ${examples.join(" · ")}`;
 }
 
 /**
@@ -449,6 +452,19 @@ function selectorExample(groups: readonly MatchGroup[]): string | undefined {
     return undefined;
 }
 
+/**
+ * A block is a section only when it holds blocks: a suite has members (`it` cases), while a case's body is plain
+ * code, so `show` must return that code instead of an empty member list. Every other container kind keeps its
+ * existing meaning, where an empty class still answers "no public members".
+ */
+function isSection(declaration: Declaration): boolean {
+    if (declaration.kind === "block") {
+        return declaration.children.length > 0;
+    }
+
+    return isContainer(declaration.kind);
+}
+
 function renderGroup(
     source: CodeSource,
     group: MatchGroup,
@@ -457,9 +473,8 @@ function renderGroup(
 ): string | undefined {
     const declarations = group.declarations.toSorted(compareDeclarations);
     const container =
-        declarations.find(
-            (declaration) => isContainer(declaration.kind) && declaration.isDefinition,
-        ) ?? declarations.find((declaration) => isContainer(declaration.kind));
+        declarations.find((declaration) => isSection(declaration) && declaration.isDefinition) ??
+        declarations.find((declaration) => isSection(declaration));
 
     if (container !== undefined) {
         const file = fileOf.get(container);
@@ -480,7 +495,7 @@ function renderContainer(
     file: ParsedFile,
     detail: CodeDetail,
 ): string {
-    const header = `# ${pathRange(source.displayPath(file.path), container.range)} · ${kindLabel(container.kind)} ${container.qualifiedName}`;
+    const header = `# ${pathRange(source.displayPath(file.path), container.range)} · ${declarationHeading(container)}`;
 
     if (detail === "full") {
         const body = sourceForDeclaration(file.source, container, true);
@@ -565,7 +580,7 @@ function renderLeaf(
     }
 
     const status = declaration.isDefinition ? "definition" : "declaration";
-    const header = `# ${pathRange(source.displayPath(file.path), declaration.range)} · ${kindLabel(declaration.kind)} ${declaration.qualifiedName} · ${status}`;
+    const header = `# ${pathRange(source.displayPath(file.path), declaration.range)} · ${declarationHeading(declaration)} · ${status}`;
 
     if (mode === "signature") {
         return `${header}\n  ${declaration.signature}`;
@@ -619,7 +634,7 @@ function renderAmbiguous(
         const displayPath = file === undefined ? "" : source.displayPath(file.path);
 
         lines.push(
-            `  ${pathRange(displayPath, declaration.range)} · ${kindLabel(declaration.kind)} ${declaration.qualifiedName}  ${shortLine(declaration.signature, 120)}`,
+            `  ${pathRange(displayPath, declaration.range)} · ${declarationHeading(declaration)}  ${shortLine(declaration.signature, 120)}`,
         );
     }
 
@@ -768,7 +783,7 @@ function notFound(
         '# next: outline(action="digest", path=...) to see the available declarations, or outline(action="usages", ...) for references';
 
     return [
-        `# not found: ${requested.join(", ")} in ${scope}`,
+        `# not found: ${requested.join(", ")} in ${scopeLabel(scope)}`,
         ...hintNotes,
         ...elsewhere,
         ...(elsewhere.length === 0 ? [next] : []),

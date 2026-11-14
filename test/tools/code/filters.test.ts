@@ -185,6 +185,18 @@ describe("outline kind filter", () => {
         expect(result.text).not.toContain("connectClient");
     });
 
+    it("names the container a kind-filtered member was taken out of", async () => {
+        const result = await runDigest(source(), {
+            action: "digest",
+            path: ".",
+            kind: "method",
+        });
+
+        // The flat list has no tree to carry the owner, and `connect()` alone leaves "of which class" unanswered.
+        expect(result.text).toContain("Port::  ");
+        expect(result.text).toContain("connect");
+    });
+
     it("renders a function-only digest flat instead of as empty containers", async () => {
         const result = await runDigest(source(), {
             action: "digest",
@@ -217,7 +229,7 @@ describe("outline kind filter", () => {
         });
 
         // The map would answer a different question: it names directories, not functions.
-        expect(result.text).not.toContain("over character limit");
+        expect(result.text).not.toContain("declarations exceed the");
         expect(result.text).toContain("unit");
         expect(result.text).toContain("# next: offset=");
         expect(result.text).toContain("kind=function");

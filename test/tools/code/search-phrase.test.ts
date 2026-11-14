@@ -91,7 +91,7 @@ describe("outline search phrase handling", () => {
         });
 
         expect(result.text).toContain("# more:");
-        expect(result.text).toContain("of 8 match(es) on later pages");
+        expect(result.text).toContain("of 8 row(s) on later pages");
         expect(result.text).toContain("next in mem/long.md");
         expect(result.text).toContain("raise limit to fit more per call");
     });

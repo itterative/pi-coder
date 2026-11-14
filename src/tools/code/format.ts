@@ -80,12 +80,13 @@ export function normalizeSymbol(text: string): string {
 export type HeadingMatch = "exact" | "prefix" | "substring";
 
 /**
- * Match a selector against a *heading*, whose name is prose rather than an identifier.
+ * Match a selector against *prose*: a heading's title, or a block's title.
  *
  * The rule that protects a code symbol — never guess between candidates — would leave most headings unreachable:
  * nobody reproduces `Framing, viewport restore, and the render cache` from memory, and a truncated title still names
- * the section the caller wants. So a heading also matches by prefix and substring, and every candidate is reported,
- * which turns a loose match into a list of sections instead of a confident wrong answer.
+ * the section the caller wants. A test title is the same kind of name: `show("commented-out import")` should reach
+ * `it("does not turn a commented-out import into an edge")`. So prose also matches by prefix and substring, and every
+ * candidate is reported, which turns a loose match into a list of sections instead of a confident wrong answer.
  *
  * Comparison ignores case, leading `#` marks, and the punctuation prose is quoted with — including the backticks
  * around `code` spans, which is why `normalizeSymbol` is not reused here.
@@ -94,7 +95,7 @@ export function headingMatch(
     declaration: Declaration,
     selector: SymbolSelector,
 ): HeadingMatch | undefined {
-    if (declaration.kind !== "heading") {
+    if (declaration.kind !== "heading" && declaration.kind !== "block") {
         return undefined;
     }
 
@@ -282,8 +283,18 @@ function hiddenSuffix(count: number, noun: string): string {
     return count > 0 ? ` (${counted(count, noun)} hidden)` : "";
 }
 
-function counted(count: number, noun: string): string {
+export function counted(count: number, noun: string): string {
     return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * A scope the caller did not name reads as the whole tree, not as a lone `.`.
+ *
+ * `# show . BashTokenizer::tokenize` was the tool echoing an empty path back at the caller; the dot is a default, not
+ * a location, and every header that prints it was printing a placeholder as if it were the target.
+ */
+export function scopeLabel(scope: string): string {
+    return scope === "." ? "(whole tree)" : scope;
 }
 
 export function declarationLine(
@@ -293,11 +304,7 @@ export function declarationLine(
 ): string {
     const includeLine = options.includeLine ?? true;
     const includeDefTag = options.includeDefTag ?? true;
-    // A frontmatter block's source is just `---`; its own name is the only thing worth showing in a map.
-    const signature =
-        declaration.kind === "frontmatter"
-            ? declaration.name
-            : shortSignature(declaration.signature, options.signatureLimit);
+    const signature = rowSignature(declaration, options.signatureLimit);
     const tag =
         includeDefTag && declaration.isDefinition && isFunctionLike(declaration.kind)
             ? " [def]"
@@ -305,6 +312,39 @@ export function declarationLine(
     const line = includeLine ? `  :${lineRange(declaration.range)}` : "";
 
     return `${indent(depth)}${signature}${line}${tag}`;
+}
+
+/**
+ * The signature a row prints.
+ *
+ * Two kinds have a name that is worth more than their source: a frontmatter block's source is just `---`, and a
+ * block's source is a call with a whole callback in it, while the pair that identifies it is the callee and the
+ * string it was opened with.
+ */
+function rowSignature(declaration: Declaration, limit: number | undefined): string {
+    if (declaration.kind === "frontmatter") {
+        return declaration.name;
+    }
+
+    if (declaration.blockCallee !== undefined) {
+        return shortSignature(`${declaration.blockCallee} "${declaration.name}"`, limit ?? 120);
+    }
+
+    return shortSignature(declaration.signature, limit);
+}
+
+/**
+ * How a declaration is named at the head of a section.
+ *
+ * The same reason as `rowSignature`: `show` on a suite should say `describe "outline digest"`, not
+ * `block outline digest::…`, because the title is the name a caller remembers.
+ */
+export function declarationHeading(declaration: Declaration): string {
+    if (declaration.blockCallee !== undefined) {
+        return `${declaration.blockCallee} "${declaration.name}"`;
+    }
+
+    return `${kindLabel(declaration.kind)} ${declaration.qualifiedName}`;
 }
 
 export function kindLabel(kind: Declaration["kind"]): string {
@@ -327,6 +367,7 @@ export function kindLabel(kind: Declaration["kind"]): string {
         case "variable":
         case "typeAlias":
         case "macro":
+        case "block":
             return kind;
         default:
             return kind;
@@ -351,7 +392,8 @@ export function isContainer(kind: Declaration["kind"]): boolean {
         kind === "interface" ||
         kind === "trait" ||
         kind === "enum" ||
-        kind === "namespace"
+        kind === "namespace" ||
+        kind === "block"
     );
 }
 
@@ -700,7 +742,7 @@ function takeLines(text: string, maxCharacters: number, headerChars = 0): Fitted
         const needed = headerChars + firstLine.length + 1;
 
         return {
-            text: `# … next line needs about ${needed} chars; raise limit to at least ${needed}`,
+            text: `# … the next block needs about ${needed} chars; raise limit to at least ${needed} to show it, or continue with offset=`,
             kept: 0,
         };
     }

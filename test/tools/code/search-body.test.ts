@@ -106,6 +106,27 @@ describe("outline search body text", () => {
         expect(result.text).not.toContain("  class  Service");
     });
 
+    it("moves the evidence onto a row the name or doc channel already listed", async () => {
+        const result = await runSearch(
+            new MemoryCodeSource("/project", {
+                "src/ledger.ts": [
+                    "/** Parses the ledger twice. */",
+                    "export function parseLedger(text: string): number[] {",
+                    "    // parses the ledger twice",
+                    "    return [];",
+                    "}",
+                    "",
+                ].join("\n"),
+            }),
+            { action: "search", path: "src", query: "parses the ledger twice" },
+        );
+
+        // One declaration, one row: the body row used to repeat the location and carry the evidence alone.
+        expect(result.text.match(/src\/ledger\.ts:2-5/g)).toHaveLength(1);
+        expect(result.text).toContain("[doc]");
+        expect(result.text).toContain(":3  // parses the ledger twice");
+    });
+
     it("caps body rows when a doc match already leads", async () => {
         const files: Record<string, string> = {
             "src/retry.ts": [

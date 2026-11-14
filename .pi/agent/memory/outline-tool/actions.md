@@ -11,10 +11,15 @@ keep_updated: true
 ## Routing and the guide
 
 Routing lives in an `outline_tool_guide` section, not in the description. Triggers name the agent's next action
-(about to `read` a long file, about to `rg` for a declaration, have a symbol name) and three literal invocations
-carry the `digest → show → usages` workflow; cheapness is stated, tidiness is not. **Intent-level triggers fail**:
-an agent already heading for `rg` answers "no, not structure". State the boundary as a real limitation, since a
-wasted turn teaches preference for `rg`.
+(about to `read` a long file, about to `rg` for a declaration, have a symbol name, about to write a test) and five
+literal invocations carry the `digest → show → usages → flow → deps` workflow; cheapness is stated, tidiness is not.
+**Intent-level triggers fail**: an agent already heading for `rg` answers "no, not structure". State the boundary as
+a real limitation, since a wasted turn teaches preference for `rg`.
+
+**The framing is structure, not declarations.** The guide used to read as a declaration tool, and a test suite, an
+entrypoint, or a script then correctly classified as out of scope — the files whose shape is worth one call. So the
+digest trigger names those files by name, blocks put `describe`/`it` trees in the map, and `flow` is offered for the
+behaviour question a `read` would otherwise answer. Do not let the wording drift back to "declaration map".
 
 **The limitation must be the literal one.** `search` still appends relevance-ranked `[related]` rows when names and
 doc comments are thin, and `SEMANTIC_HINT` is suppressed once hybrid is active, so a guide saying `search` reads
@@ -69,6 +74,24 @@ needs that range. The note sits before the body so a line-comment language canno
 also matches by normalized prefix and substring (case, leading `#`, punctuation ignored), every candidate is
 reported, and a note names the loose rows; identifier matching is unchanged. A comma in a title is text: an entry
 whose split parts all miss but whose text names a heading is used whole (announced as `# comma:`).
+
+## Prose and `flow`
+
+- **Prose is matched as prose.** `format.ts` `headingMatch` covers Markdown headings *and* `block` titles: prefix
+  and substring of the normalized title, every candidate reported, a `# heading:` / `# title:` note naming loose
+  rows. A symbol still matches exactly, and a comma-joined entry that names one title is used whole (`# comma:`).
+- **`flow` lists call expressions by scope and callee**, parsed from the adapter's `callTargets`: a call that opens a
+  block belongs to the enclosing scope and prints as the bare callee, only a call inside another call's *callee* is
+  dropped, repeats collapse into `callee  ×N  :lines`, 40 rows per scope with a `# +N more` count.
+  `outline-tool/blocks-and-flow.md`.
+- **A kind-filtered digest names the filtered-away owner** (`Port::  private void reset()`), because the flat list has
+  no tree to carry it.
+- **A guess is not a match.** `search` counts literal rows only (`no literal matches · N related guesses`), folds a
+  body row's evidence onto a row that already lists its declaration, and names a literal row displaced below the
+  related ones (`# also: …`).
+- **A file with no declarations is not empty.** `digest` counts its top-level call sites and names `flow` instead of
+  saying `# no declarations`. The directory-map fallback says *why* it replaced the declarations and uses
+  `# deeper:` (not `# next:`) for its descend hint, so a complete map never reads as a truncated one.
 
 ## Cuts
 

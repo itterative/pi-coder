@@ -1,7 +1,7 @@
 import path from "node:path";
 
 import { discoverFiles, parsePathTarget, type Discovery } from "./discovery";
-import { discoveryCapNote, nextOffsetNote, renderWithinBudget } from "./format";
+import { discoveryCapNote, nextOffsetNote, renderWithinBudget, scopeLabel } from "./format";
 import {
     createResolveIndex,
     dependentsOf,
@@ -265,9 +265,10 @@ function dependentBlock(
     );
 
     if (rows.length === 0) {
-        return ["dependents", `  # no file under ${source.displayPath(root)} imports it`].join(
-            "\n",
-        );
+        return [
+            "dependents",
+            `  # no file under ${scopeLabel(source.displayPath(root))} imports it`,
+        ].join("\n");
     }
 
     return ["dependents", ...rows].join("\n");

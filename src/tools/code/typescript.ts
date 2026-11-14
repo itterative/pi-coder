@@ -1,6 +1,7 @@
 import type { Node as SyntaxNode } from "@vscode/tree-sitter-wasm";
 
 import { countParseErrors, parseSyntax } from "./tree-sitter";
+import { stripComments } from "./text";
 import type { Access, Declaration, DeclarationKind, DeclarationRange, ParsedFile } from "./types";
 
 /**
@@ -144,6 +145,10 @@ class TypeScriptVisitor {
                 return;
             case "type_alias_declaration":
                 this.visitTypeAlias(node, context);
+
+                return;
+            case "expression_statement":
+                this.visitCallStatement(node, context);
 
                 return;
             default:
@@ -487,6 +492,79 @@ class TypeScriptVisitor {
         }
     }
 
+    /**
+     * A statement-level call whose first argument is a string literal and whose last argument is a function.
+     *
+     * The shape is the whole rule, and that is the point: a named block is `something("name", ...) { ... }` in
+     * every framework that has one - `describe`/`it`, a route with an inline handler, an event subscription, a
+     * mocked module - so no callee allowlist is needed and a new framework needs no change here. `console.log("x")`
+     * (no callback) and `router.get(path, handler)` (no literal) do not qualify; `vi.mock("fs", () => ...)` does,
+     * which is the honest reading of the same shape.
+     *
+     * The callback is walked with `local: true`: a plain local inside a suite is not a declaration, but a nested
+     * `it` is, which is what turns a test file into a tree.
+     */
+    private visitCallStatement(node: SyntaxNode, context: ScopeContext): void {
+        const expression = namedChildren(node)[0];
+
+        if (expression === undefined || expression.type !== "call_expression") {
+            return;
+        }
+
+        const calleeNode = expression.childForFieldName("function");
+        const argumentList = expression.childForFieldName("arguments");
+        const args = argumentList === null ? [] : namedChildren(argumentList);
+        const first = args[0];
+        const last = args.at(-1);
+
+        if (calleeNode === null || first === undefined || last === undefined) {
+            return;
+        }
+
+        if (!isFunctionValue(last)) {
+            return;
+        }
+
+        const name = stringLiteralValue(first, this.textOf(first));
+
+        if (name === undefined) {
+            return;
+        }
+
+        const callee = this.collapse(this.textOf(calleeNode));
+        const body = last.childForFieldName("body") ?? null;
+        const qualifiedName = appendQualified(context.scope, name);
+        const declaration: Declaration = {
+            kind: "block",
+            name,
+            qualifiedName,
+            signature: `${callee}(${this.textOf(first)})`,
+            range: this.rangeOf(node.startIndex, node.endIndex),
+            bodyRange: body === null ? undefined : this.rangeOf(body.startIndex, body.endIndex),
+            nameRange: this.nameRangeOf(first),
+            docRange: this.docRangeOf(node),
+            paramTypes: [],
+            access: context.access,
+            isDefinition: true,
+            children: [],
+            language: this.language,
+            blockCallee: callee,
+        };
+
+        this.push(declaration, context.parent);
+
+        if (body === null) {
+            return;
+        }
+
+        this.visitNode(body, {
+            scope: qualifiedName,
+            parent: declaration,
+            docAnchor: node,
+            local: true,
+        });
+    }
+
     private visitEnum(node: SyntaxNode, context: ScopeContext): void {
         const nameNode = node.childForFieldName("name") ?? findFirst(node, "identifier") ?? null;
         const body = node.childForFieldName("body") ?? findFirst(node, "enum_body") ?? null;
@@ -631,6 +709,9 @@ class TypeScriptVisitor {
             declaration.isDefinition ? "def" : "decl",
             declaration.signature,
             declaration.paramTypes.join(","),
+            // Two suites may share a title in one file. Unlike a declaration and its definition, which the key
+            // exists to pair, they are different blocks, so their position is part of their identity.
+            declaration.kind === "block" ? declaration.range.startIndex : "",
         ].join("\u0000");
 
         if (this.seen.has(key)) {
@@ -650,11 +731,7 @@ class TypeScriptVisitor {
     }
 
     private signatureBetween(startIndex: number, endIndex: number): string {
-        const text = this.source
-            .slice(startIndex, endIndex)
-            .replace(/\/\*[\s\S]*?\*\//g, " ")
-            .replace(/\/\/[^\n]*/g, " ")
-            .replace(/;\s*$/, "");
+        const text = stripComments(this.source.slice(startIndex, endIndex)).replace(/;\s*$/, "");
 
         return this.collapse(text);
     }
@@ -750,6 +827,32 @@ function isFunctionValue(
             node.type === "function_expression" ||
             node.type === "function")
     );
+}
+
+/**
+ * The text inside a string or substitution-free template literal, collapsed to one line.
+ *
+ * A title is prose, so the surrounding quote marks and any indentation the source wrapped it in are not part of
+ * the name a caller would search for. A template with a substitution is an expression, not a name, and is skipped.
+ */
+function stringLiteralValue(node: SyntaxNode, text: string): string | undefined {
+    if (node.type !== "string" && node.type !== "template_string") {
+        return undefined;
+    }
+
+    if (node.namedChildren.some((child) => child?.type === "template_substitution")) {
+        return undefined;
+    }
+
+    // The surrounding quote marks are not part of the name. An escape sequence inside stays as written: a title is
+    // matched the way the caller remembers it, not the way the runtime would evaluate it.
+    const value = text
+        .replace(/^["'`]/, "")
+        .replace(/["'`]$/, "")
+        .replace(/\s+/g, " ")
+        .trim();
+
+    return value.length === 0 ? undefined : value;
 }
 
 function appendQualified(scope: string, name: string): string {

@@ -1,14 +1,15 @@
 # outline tool
 
-One agent-facing tool, `outline`, with five actions:
+One agent-facing tool, `outline`, with six actions:
 
-- `digest` — map a file or directory: namespaces/types, public signatures, line ranges, `[def]` tags.
+- `digest` — map a file or directory: namespaces/types, public signatures, block titles, line ranges, `[def]` tags.
 - `search` — declarations whose name, doc comment, frontmatter, or literal body text matches a query, with a
   conservative typo fallback.
 - `show` — exact source for named symbols; a directory target pairs header declarations with source definitions.
 - `usages` — syntactic occurrences with `[def]` / `[decl]` / `[call]` / `[ref]` tags, plus `[launch]` for
   HIP/CUDA kernel launches.
 - `deps` — one file's imports and the files that import it, file-level and syntactic.
+- `flow` — the call sites of a file or a scope, grouped by the scope that owns them, in source order.
 
 Narrowing is a parameter, not an action. `path` takes a literal file or directory, or an rg-style pattern: one
 containing `/` is anchored (`*` is one level, `**` crosses directories), and one without `/` matches the basename
@@ -19,7 +20,9 @@ one declaration kind for `search`/`digest`, and one occurrence class for `usages
 `# filter:` line, with a hidden count when the post-filter removed anything — a smaller result must not read as
 "nothing matched". A `kind` filter in `digest` lists the matching declarations flat, with no ancestor lines: the
 qualified name carries the container, and an indented child under a hidden parent would draw a tree that does not
-exist.
+exist. A member whose owner was filtered away is prefixed with that owner
+(`Port::  private void reset()  :11-13`) — the tree can no longer carry it, and `reset()` alone does not say which
+class it came from.
 
 `search` takes a phrase in `query`; `show` and `usages` take selectors there, and one string may hold a
 comma-joined list (`"A::b, C::d"`): `format.ts`'s `splitSymbolList` splits on **top-level** commas only, so an
@@ -199,6 +202,80 @@ output.
   separately (`sourceForDeclaration`).
 - `usages` has no identifier index for Markdown and reports zero matches. There is no code to resolve.
 
+## Blocks
+
+A declaration model stops where the grammar stops, and in a test suite that is the wrong place: `describe("outline
+digest", () => …)` is a call, not a declaration, so a 600-line spec file would map as a couple of imports and
+nothing else. TypeScript/JavaScript extraction therefore emits `block` declarations from one shape:
+
+> a **statement-level** call whose first argument is a string literal and whose last argument is a function literal.
+
+That rule needs no framework allowlist — `describe`/`it`/`test`, a route with an inline handler, an event
+subscription, `vi.mock("fs", () => …)` all answer to it — and it filters out what merely looks similar: a call
+without a callback (`console.log("x")`), a name without a literal (`router.get(path, handler)`), an identifier
+handler (`watch("file", handler)`), and a substituted template (`` describe(`suite ${name}`) ``). The false
+positive it does admit, `console.log("x", () => …)`, is still a labelled block, which is a cheaper mistake than a
+missing suite.
+
+A block is a `Declaration` in every other respect, which is what makes the rest of the tool work unchanged:
+`name` is the title, `blockCallee` is the call (`describe`, `test.describe`, `router.get`), `qualifiedName`
+composes across nesting, `children` are the blocks inside it, and `bodyRange` is the callback body. `digest`
+renders `describe "outline digest"  :95-170`; `search` finds a case by the words of its title; `show` on a suite
+lists its cases and on a case returns its code; `usages` groups a case's occurrences under its title; and both
+the block and its body text are indexed for the semantic channel.
+
+Three rules that are easy to break:
+
+- **A block is a container only when it holds blocks** (`show.ts` `isSection`). A suite has members, a case's body
+  is plain code, so a case must render as a leaf — its `no public members` header was the bug this prevents.
+- **Position is part of a block's identity.** `push()` dedupes by qualified name, signature, and parameters to pair
+  a header declaration with its definition; two suites may share a title in one file, so a block's
+  `range.startIndex` joins the key, or the second suite would silently vanish.
+- **No `[def]` tag.** A block always has a body, so the tag that marks a definition would be noise on every row.
+
+Ruby's RSpec has the same shape and is not covered yet: `describe … do … end` is a call with a block argument, and
+`ruby.ts` would need the same rule on `call` / `do_block` nodes.
+
+## Call sites
+
+`flow` answers what a stretch of code *does*, where `digest` answers where things are and `show` returns one body.
+Rows are **call expressions grouped by callee**, not source lines: a line that merely contains an identifier and an
+open paren is a fragment of an expression (`.filter((line) =>`, `filter ?? ""`), while `callee(args)` is the unit a
+reader scans. The call shape comes from the adapter's `callTargets`, so all ten languages work without a node type
+leaking into `flow.ts`.
+
+```
+# flow test/suites.test.ts · 1 file · 8 call sites · typescript
+
+test/suites.test.ts  · 8 call sites · 6 scopes
+  file
+    describe  ×2  :1,:11
+  describe "flow root"  :1-9
+    it  ×2  :2,:6
+  it "first case"  :2-4
+    expect(one()).toBe(1)  :3
+```
+
+- **A call that opens a block is the block's heading.** It belongs to the enclosing scope (`ownerScope`: a scope
+  whose body starts at the call is excluded) and prints as the bare callee `describe  :1` — its arguments span the
+  whole body, so printing them would put a 90-line suite inside the file's row. A scope's rows are therefore its
+  direct calls, and its cases collapse into one counted row (`it  ×2  :2,:6`).
+- **Only a call inside another call's *callee* is dropped.** `expect(x)` is part of `expect(x).toBe(y)`, so it goes;
+  `candidateFiles(...)` inside `timing.measure("x", () => ...)` stays, because those are two things the scope does.
+- **Repeats collapse.** A callee that appears more than once prints `callee  ×N  :line,line,…` (first six lines, then
+  `,…`); a single call prints the whole expression on one line, with a multi-line argument list collapsed and its
+  trailing comma removed.
+- **Scopes, files, and the cap.** A scope heading is `Name  :start-end`, or `describe "title"  :start-end` for a
+  block; methods keep their owner (`BashTokenizer::tokenize`) because a flat list has no indentation to carry it.
+  Each file prints its own `path  · N call sites · M scopes` line, so a directory or glob result is scannable per
+  file. A scope prints at most 40 callee rows; the rest are reported as `# +N more call site(s) in this scope` and the
+  header total counts the withheld ones.
+- **`query` selects scopes, it does not resolve a call.** Every matching scope is listed under its own heading with its
+  line range, so two suites that share a title are both shown instead of being guessed between.
+- Same limitation, stated in the output, and one grammar note: a call is a callee followed by an argument list, so
+  overloads, generics, macros, and dynamic dispatch are not resolved, and Ruby's paren-less `helper` is an
+  `identifier` rather than a `call` node in the grammar — `usages` shares both limits.
+
 ## Literal body text
 
 `search` also reads the text *inside* a declaration body — log messages, thrown errors, inline comments, SQL
@@ -207,11 +284,17 @@ fragments — and reports **the declaration that contains it**, not the line. Th
 
     src/store/artifact.ts:1-8  function  download  ...  [def] [body]
       :6  throw new Error(`${spec} failed its checksum`);
+    test/deps.test.ts:49-63  it  "separates local, external, and unresolved imports"  (outline deps)
+      :56  expect(result.text).toContain("4 imports");  ×2
 
 Three rules keep it from becoming a second grep:
 
 - **Text-shaped queries only.** At least two whitespace-separated words. A single word is an identifier question,
   and every body that mentions `connect` would otherwise flood a result `usages` already answers properly.
+- **One row per declaration.** A body row whose declaration is already listed by name or doc moves its evidence onto
+  that row; a body row whose evidence sits inside a *listed descendant* is dropped, so a case's line never appears
+  under its suite's heading. Both were visible as duplicated locations (`deps.test.ts:49-63` twice) and as a suite
+  heading with an evidence line from someone else's test.
 - **Declaration granularity.** A match inside a method body belongs to the method, not to its class
   (`innermostOnly`), and repeated hits collapse into one row with a count. The follow-up is one `show`.
 - **Markdown is excluded.** A memory's prose *is* its doc channel; a body row would restate the section the doc
@@ -294,6 +377,10 @@ costs what `usages` costs, and imports are cached per `ParsedFile` so an edited 
 
 ## Output and limits
 
+- A file with nothing to map says what it does have instead of `# no declarations`: `# no declarations · 17
+  top-level call sites · outline(action="flow", path="…") lists them`, or a re-export/comment-only line when it
+  holds no calls. The count costs one usage-index pass, and only on the empty path — `src/index.ts` reporting
+  "nothing" was the answer that taught an agent the tool does not apply to entrypoints.
 - `digest` degrades to a directory map when the result exceeds the character limit, and large files (`[huge]`) render
   only top-level declarations. `detail="full"` includes private/protected members, fields, enum members, and
   nested variables; a **root** variable is a module constant and is part of the signature list too. Declaration rows
@@ -312,7 +399,10 @@ costs what `usages` costs, and imports are cached per `ParsedFile` so an edited 
   not "which file", which is what a caller who named one directory usually asked. Names are added per row while the
   budget allows — the root's own files first, since they sit in no subdirectory, then each directory in size order
   — under the summary line (`.  15 files` / `  ask-user.ts list-view.ts …`). A list that had to stop says so
-  (`# … 4 more`), and `# next: outline digest <dir>` still names the largest directory to open next.
+  (`# … 4 more`). `# deeper: outline digest <dir>` names the largest directory to open next; it is deliberately not
+  `# next:`, which is the truncation marker, and a complete map must not read as a shortened one. The header says
+  why the map replaced the declarations (`declarations exceed the N-char limit; showing the file list`) rather than
+  claiming the returned text was over limit.
 - **Paging.** A cut result ends with `# next: offset=N` *and* how many body lines remain, because the step between
   pages is set by the character budget rather than a line count: `# next: offset=19 · 111 of 130 line(s) left · raise
   limit to fit more per call`. When a page stops inside a block, `# omitted N more block(s) after this body` names the
@@ -430,7 +520,13 @@ the related rows lead, because a doc tier that merely saw every content word som
 `TAIL_ROWS` of guesses could then fill the leading page and push the query's *only* literal match onto the next one,
 leaving a `# more:` note that points at the one row that was evidence. So the leading page keeps its slot: seven
 related rows, then the literal rows, then the tail's weakest guess (`relatedLedPage` in `search.ts`). A short tail
-changes nothing, since the literal rows already follow it.
+changes nothing, since the literal rows already follow it. Because a slot can still sit below the fold, a displaced
+literal row is named in the footer (`# also: literal row follows the related guesses · path:range kind name`) rather
+than being left to a page the caller may never open.
+
+**Guesses are not matches.** The summary counts literal rows only: `3 matches` over three similarity guesses was the
+most dangerous number the tool printed, because an agent reads it as "the identifier exists". With no literal row the
+summary says `no literal matches · N related guesses`, and the `matches` field carries the literal count.
 
 A doc-comment match suppresses the tail (`wantsTail` in `semantic/rank.ts`): the doc tier requires every content
 word of the query to appear in one declaration's prose, so it is the strongest cheap evidence there is, and the
@@ -581,6 +677,11 @@ selection, the index layout, and the measured build cost (~10 ms per vector on a
 - `test/tools/code/filters.test.ts` — `path` pattern matching (anchored, basenames, braces, no match) and
   `kind` narrowing in search and digest, including the hidden-count notes.
 - `test/tools/code/actions.test.ts` — digest/search/show/usages against C++/HIP `MemoryCodeSource` fixtures.
+- `test/tools/code/blocks.test.ts` — the `block` kind: the literal-plus-callback discriminator and what it
+  rejects, the nested test tree, `show` on a suite vs a case, title search, usage grouping, duplicate titles,
+  and the empty-digest signpost.
+- `test/tools/code/flow.test.ts` — call-site rows, scope ownership, query narrowing, the per-scope cap,
+  offset continuation, and the no-calls result.
 - `test/tools/code/typescript-parser.test.ts` — TypeScript and TSX extraction, access modifiers, parameters,
   interfaces, arrow-function constants, and nested closures.
 - `test/tools/code/typescript-actions.test.ts` — digest/search/show/usages against TypeScript fixtures,
