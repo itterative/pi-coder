@@ -71,7 +71,7 @@ describe("outline show pagination", () => {
         });
 
         // Both the continuation and what is left, because the page step is set by the character budget.
-        expect(result.text).toMatch(/# next: offset=\d+ · \d+ of \d+ line\(s\) left/);
+        expect(result.text).toMatch(/# next: offset=\d+ · \d+ of \d+ body line\(s\) left/);
         expect(result.text).toContain("# … truncated 51 line(s)");
         expect(result.text).toContain("raise limit to fit more per call");
     });

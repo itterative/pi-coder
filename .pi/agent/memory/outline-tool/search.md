@@ -44,10 +44,13 @@ when nothing was hidden, because a scoped result must not read as the whole tree
 channel searches inside the filter rather than around it; a kind filter in `digest` renders matches flat, without
 ancestor lines.
 
-The tail runs only when the literal pass produced fewer than `TAIL_MIN_LITERAL` (3) rows, and never when a fuzzy
-match exists: an identifier typo is precise evidence, a relevance guess is not. BM25 and embedding lists are
-fused with reciprocal rank fusion (`k = 60`), which is where the measured gain came from — the channels' score
-scales never have to agree.
+The tail runs on every query, and only two shapes skip it: a fuzzy identifier match (an identifier typo is precise
+evidence, a relevance guess is not) and a one-character query (a substring request, not a question). It used to be
+gated on the literal row count because a query embedding cost 0.6–3 s; at 51–69 ms warm there is no cost reason to
+skip it, and the literal pass cannot see what it missed. A strong lexical hit still leads the page — related rows
+decorate rather than displace it. `leadsWithRelated` decides placement; every related row is fused with BM25 by
+reciprocal rank fusion (`k = 60`), which is where the measured gain came from — the channels' score scales never
+have to agree.
 
 ## Literal body text
 
@@ -60,8 +63,7 @@ every body that mentions it; `usages` answers that case.
 - **Markdown excluded.** A memory's prose is already its doc text; a body row would restate the section the doc
   tier found.
 - **Caps.** `BODY_ROWS` (20) when the name/doc pass found fewer than three rows and no doc match, else
-  `BODY_ROWS_WHEN_LED` (3), with a footer naming the withheld count. The cap is a token budget, not an evidence gate — the `wantsTail` rule exists
-  to avoid a query embedding, and a body scan has already run by then.
+  `BODY_ROWS_WHEN_LED` (3), with a footer naming the withheld count. The cap is a token budget, not an evidence gate — a body scan has already run by then.
 - **Cost is dominated by yields, not by the scan.** Measured on this repo (361 files, 3.4 MB under `src`): ~10–12 ms
   per fresh query, adding ~12 ms to a warm text search. Yielding every 8 files made the channel ~50 ms, because the
   per-file scan is microseconds and `setImmediate` was most of the time; the interval is 64 files, safe because a
@@ -262,8 +264,9 @@ A C++23/HIP user filed nine defects after ~50 calls; the ones that were real and
   carries one `path:span · kind name` line per resolved group before any body, so nothing can look "not found"
   when it was merely not reached.
 - `# next: offset=N` did not say how much was left, and the page step is set by characters, not lines. It now reads
-  `# next: offset=19 · 111 of 130 line(s) left · raise limit to fit more per call` (`BudgetedText` gained
-  `first`/`shown`/`remaining`/`total`).
+  `# next: offset=19 · 111 of 130 body line(s) left · raise limit to fit more per call` (`BudgetedText` gained
+  `first`/`shown`/`remaining`/`total`). The unit is named because `show`'s offset is a body-line index while other
+  actions count output lines — the same suffix used to mean two things.
 - The best hit could sit on page two with no signal: search now ends a cut page with
   `# more: 69 of 82 match(es) on later pages, next in <path>`.
 - `usages` discarded a qualifier and matched the last name component only, so `CallList::attention_paged` mixed in
@@ -313,6 +316,10 @@ Three defects the run found, all fixed:
   `call_list.cpp`, so no type declaration encloses its body and every call inside it was tagged `[name-only]` even
   though the caller asked about exactly that class. `matchesEnclosingType` now falls back to the innermost enclosing
   *scope*'s qualified name (`qualifiedNameHasParent`), same as the definition path already did.
+- **`[name-only]` was also wrong for an occurrence that spells the qualifier.** `OpId::gemm` inside a free function is
+  exactly what was asked for, but the enclosing declaration is not `OpId`, so every row was tagged `[name-only]`.
+  `scanFile` now also counts the row text naming `<type>::` as a typed match; only rows that *do not* spell it stay
+  marked, which is the widening the tag was meant to report.
 - **A missing path surfaced `stat … ENOENT …`.** The tool-level catch now answers `# no such path: <path> · check the
   spelling, or digest its parent`; anything else still reports the raw message.
 
@@ -355,7 +362,7 @@ one row.
 Cosines are compressed into roughly 0.6–0.75 for this model: the best row for a query with *no answer in the corpus*
 (0.680) outscores the seventh row of a query that has one (0.622). So **do not add an absolute cosine floor** — it
 cannot separate relevance, and a relative margin would be one fixture's guess. The honest signals stay the tag, the
-footer, and the row cap (that is also why `wantsTail` gates on evidence rather than row count).
+footer, and the row cap (which is why the remaining gates are evidence-shaped: a typo and a one-character query).
 
 Body comments remain invisible to dense too: promoting the body comment into the adjacent doc block is what changes
 the answer, which is the boundary the guide now states (round-3 item 1). Numbers and the table: `docs/outline-search.md`
@@ -439,14 +446,10 @@ So a search that finds ≥3 names/doc comments is already ~25 ms; the 1–2 s ca
 through to the tail. Batched searches serialize on the single embed child, so N tail searches cost N × the tail
 cost.
 
-**The tail is now gated on evidence, not just row count** (`wantsTail` in `semantic/rank.ts`, 2026-11-11): it runs
-only below 3 literal rows *and* with zero doc-tier matches. Measured on the memory tree after that fix plus the
-tokenizer fix: a doc hit answers in 10–15 ms warm (75–320 ms when the parse itself is cold), where the equivalent
-query previously paid 0.6–3.2 s (`tail` 98% of `totalMs`) and got 8 `[related]` rows under an already-correct
-first row. One body-only word: 627 → 11 ms. One body-only phrase: 3209 → 75 ms. A natural-language question whose
-filler words are now stoplisted: 1285 ms with the right section at #3 → 10 ms with it at #1 (live: 263 ms on the
-first call, 13.9 ms warm). Queries the doc tier genuinely cannot reach — one content word that no doc contains, or
-the wrong vocabulary for the codebase — still take the tail: live 2611 ms with a cold model child, 683 ms warm.
+**The tail runs on every query** (2026-11-14): the old `wantsTail` gate existed because a query embedding cost
+0.6–3.2 s cold and 683 ms warm. At 51–69 ms warm the gate was removed rather than tuned — a doc hit no longer
+suppresses the rows that would have followed it. A fuzzy typo and a one-character query are the only exclusions, both
+because the request is not a question. `TAIL_MIN_LITERAL` and `wantsTail` no longer exist; do not reintroduce them.
 
 Do not quote a probe query verbatim in a memory. The memory then becomes a doc hit for that query and outranks the
 section that actually answers it (observed: a benchmark note ranked #2 for the question it was measuring).

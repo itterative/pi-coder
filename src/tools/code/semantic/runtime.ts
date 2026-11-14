@@ -99,6 +99,16 @@ export interface BuildOptions {
     device?: DevicePreference;
 }
 
+/**
+ * What the runtime reports instead of writing to the terminal.
+ *
+ * An extension's raw stdout/stderr writes are not captured by pi, so they corrupt the TUI mid-frame. Diagnostics are
+ * events instead: the caller decides whether they go to a log file, a notification, or nowhere.
+ */
+export type EmbedRuntimeEvent =
+    | { kind: "device-fallback"; preference: "auto" | "vulkan"; message: string }
+    | { kind: "server-output"; device: "cpu" | "vulkan"; text: string };
+
 export interface EmbedRuntime {
     /** Embed one query, with the model's instruction prefix, or reject when the runtime is unavailable. */
     embedQuery(text: string, signal?: AbortSignal): Promise<Float32Array>;
@@ -164,7 +174,10 @@ interface Slot {
  *
  * When both roles land on the same device (the common CPU-only machine), there is one server, not two.
  */
-export function createEmbedRuntime(options: { modelDir: string }): EmbedRuntime {
+export function createEmbedRuntime(options: {
+    modelDir: string;
+    onEvent?: (event: EmbedRuntimeEvent) => void;
+}): EmbedRuntime {
     const slots = new Map<string, Slot>();
     const starting = new Map<string, Promise<Slot>>();
     let broken = false;
@@ -225,6 +238,8 @@ export function createEmbedRuntime(options: { modelDir: string }): EmbedRuntime 
                 modelFile: modelFile(options.modelDir),
                 gpuLayers: choice.device === "vulkan" ? 999 : 0,
                 deviceId: choice.deviceId,
+                onOutput: (text) =>
+                    options.onEvent?.({ kind: "server-output", device: choice.device, text }),
             });
             const slot = { choice, server };
 
@@ -269,9 +284,13 @@ export function createEmbedRuntime(options: { modelDir: string }): EmbedRuntime 
                 throw error;
             }
 
-            process.stderr.write(
-                `semantic: ${preference} device unavailable (${error instanceof Error ? error.message : String(error)}); using cpu\n`,
-            );
+            options.onEvent?.({
+                kind: "device-fallback",
+                preference,
+                message: `semantic: ${preference} device unavailable (${
+                    error instanceof Error ? error.message : String(error)
+                }); using cpu`,
+            });
 
             return ensure("cpu");
         }

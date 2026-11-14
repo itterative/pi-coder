@@ -133,6 +133,11 @@ output.
   accept `Type.member` and `Type::member`.
 - JavaScript and TypeScript have no preprocessor pass; source slices come directly from the file. JSX and TSX
   use their respective grammars.
+- One grammar gap is worth knowing: a call whose type arguments contain `typeof import("…")`
+  (`importOriginal<typeof import("./x")>()`) parses with an `ERROR` node marked at `>()`. The visit still recovers
+  and the declarations are extracted, but the file reports one parse error per occurrence, so a `# parse:` footer
+  can name a file that is valid TypeScript. Plain `f<string>()`, `new Set<string>()`, and `as typeof import(…)` all
+  parse cleanly.
 - Named functions and arrow/function constants declared inside a function or method body are extracted as
   children of that scope (`outer::inner`, `outer::helper`). Plain local variables are not declarations, so a
   local `const value = 1` does not clutter the map; a local `const helper = () => ...` does, because it is a
@@ -527,11 +532,13 @@ first search is ~2 s against ~25 ms warm), and `all cached` beside a high total 
 
 ## Relevance tail
 
-When the literal pass produces fewer than three rows, no doc-comment match, and no identifier typo matched, `search`
-appends a short tail of `[related]` rows. BM25 over name/doc/signature always backs it; an opt-in embedding
-channel joins once a model is downloaded and the index for the searched root is warm. The channels are fused with
-reciprocal rank fusion (k=60) so their score scales never have to agree. Every embedding failure degrades to BM25
-only, and the tail never fails the search.
+`search` runs the relevance tail on every query, then keeps a strong lexical answer first. BM25 over
+name/doc/signature always backs it; an opt-in embedding channel joins once a model is downloaded and the index for the
+searched root is warm. The channels are fused with reciprocal rank fusion (k=60) so their score scales never have to
+agree. Every embedding failure degrades to BM25 only, and the tail never fails the search. Only two shapes skip it: an
+identifier typo match (the corrected name is the answer) and a one-character query (a substring request). A warm query
+embedding costs under 100 ms, so there is no longer a cost reason to gate the channel on how little the literal pass
+found.
 
 Measured on an 8-declaration fixture with the real artifacts: the dense channel changed no *rank* that BM25 had not
 already got right (a tail needs only partial term overlap), and its visible effect was filling the tail to
@@ -553,20 +560,17 @@ than being left to a page the caller may never open.
 most dangerous number the tool printed, because an agent reads it as "the identifier exists". With no literal row the
 summary says `no literal matches · N related guesses`, and the `matches` field carries the literal count.
 
-A doc-comment match suppresses the tail (`wantsTail` in `semantic/rank.ts`): the doc tier requires every content
-word of the query to appear in one declaration's prose, so it is the strongest cheap evidence there is, and the
-tail would cost a query embedding (0.6–3 s warm/cold) to append rows the agent never needed. Both gates count
-*evidence*, not just rows: three weak name hits buy a tail, one exact doc hit does not. The doc tier tokenizes with
-the same stopword-filtered tokenizer BM25 uses (`tokenize`), so filler words in a natural-language query cannot
-make an otherwise perfect prose match miss.
+A doc-comment match still leads, and the tail now follows it instead of being suppressed: the doc tier requires every
+content word of the query to appear in one declaration's prose, so it is the strongest cheap evidence there is — but a
+query embedding is 51–69 ms warm, so the rows the doc row alone would hide are cheaper to fetch than to reason about
+skipping. Both channels count *evidence*, not just rows: the tag, the footer, and the explicit counts keep the two
+readable apart. The doc tier tokenizes with the same stopword-filtered tokenizer BM25 uses (`tokenize`), so filler
+words in a natural-language query cannot make an otherwise perfect prose match miss.
 
-**The gate has a cost worth knowing.** One doc or frontmatter row is enough to suppress the tail, so a query whose
-words land in a file's `description:` returns that one row *instead of* the section map the tail used to add: on a
-memory tree, `knob registry tune table` went from five spans in `tuning.md` to one `[frontmatter]` row, and
-`scripted edits assert the match count` from four loose sections to the frontmatter plus the one section that
-answers. The right file still comes first, and the workaround is a second call — `search path=<that file>` returns
-its sections — which is why the trade stands: a section list costs a query embedding, and it is not worth spending
-on an answer that already points at the right file.
+**The gate is gone, so the doc row no longer stands alone.** The tail used to be suppressed whenever a doc or
+frontmatter row matched — the doc row answered alone, so `knob registry tune table` on a memory tree returned one
+`[frontmatter]` row instead of the sections the tail would have added. With the query embedding cheap enough to always
+run, the frontmatter row leads and the sections follow it; the `# also:` note still names a displaced literal row.
 
 ### Body chunks
 

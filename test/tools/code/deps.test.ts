@@ -126,6 +126,40 @@ describe("outline deps", () => {
 
         expect(result.text).toContain("needs a file, not a directory");
     });
+
+    it("repeats a block heading when a page starts inside it", async () => {
+        const imports = Array.from(
+            { length: 40 },
+            (_, index) => `import { f${index} } from "./m${index}";`,
+        );
+        const files: Record<string, string> = {
+            "src/a.ts": [...imports, "", "export const value = f0();", ""].join("\n"),
+        };
+
+        for (let index = 0; index < 40; index += 1) {
+            files[`src/m${index}.ts`] =
+                `export function f${index}(): number {\n    return ${index};\n}\n`;
+        }
+
+        const page = await runDeps(source(files), {
+            action: "deps",
+            path: "src/a.ts",
+            limit: 600,
+        });
+        const next = /# next: offset=(\d+)/.exec(page.text)?.[1];
+
+        expect(next).toBeDefined();
+
+        const continuation = await runDeps(source(files), {
+            action: "deps",
+            path: "src/a.ts",
+            limit: 600,
+            offset: Number(next),
+        });
+
+        // Rows with no heading read as top-level lines; the heading is reprinted on the page that lost it.
+        expect(continuation.text).toMatch(/\nimports\n/);
+    });
 });
 
 describe("outline deps across languages", () => {

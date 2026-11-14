@@ -4,6 +4,7 @@ import { discoverFiles, filterPathTarget, parsePathTarget, patternWithinTarget }
 import {
     bodyThenFooter,
     counted,
+    declarationKindCounts,
     declarationLine,
     discoveryCapNote,
     filterNote,
@@ -12,13 +13,14 @@ import {
     renderWithinBudget,
     scopeLabel,
 } from "./format";
-import { DEFAULT_CHAR_LIMIT, MAX_FILES, languageForPath, sizeLabel } from "./languages";
+import { DEFAULT_CHAR_LIMIT, MAX_FILES, sizeLabel } from "./languages";
 import { loadParsedFiles } from "./load";
 import type { CodeSource } from "./source";
 import { CallTiming } from "./timing";
 import { buildUsageIndex, scopeAt } from "./usages";
 import {
     isDeclarationKind,
+    matchesDeclarationKind,
     type CodeDetail,
     type CodeToolParams,
     type Declaration,
@@ -133,6 +135,7 @@ export async function runDigest(
         pathHidden: targeted.hidden,
         kind,
         kindHidden,
+        kindCounts: kind === undefined ? undefined : declarationKindCounts(parsed),
     });
 
     if (kind !== undefined && rendered.every((entry) => entry.hidden === entry.total)) {
@@ -186,7 +189,7 @@ export async function runDigest(
     // A kind filter must not degrade to the directory map: the caller asked for declarations of one kind, and a map of
     // directory names answers a different question. Page the flat list instead, so `# next: offset=N` continues it.
     if (!fits && !discovery.rootIsFile && kind === undefined) {
-        const map = renderDirectoryMap(source, root, targeted.files, limit, scope);
+        const map = renderDirectoryMap(source, root, parsed, limit, scope);
 
         if (map !== undefined) {
             if (offset === 0) {
@@ -379,23 +382,38 @@ function renderKind(
     kind: DeclarationKind,
     total: number,
 ): RenderedFile {
-    const matched = file.all.filter((declaration) => declaration.kind === kind);
+    const matched = file.all.filter((declaration) =>
+        matchesDeclarationKind(declaration.kind, kind),
+    );
 
     if (matched.length === 0) {
         return { text: "", hidden: total, total, accessHidden: 0, signatureHidden: new Map() };
     }
 
-    // A kind filter lists members flat, so the container that the tree would have carried has to be named:
-    // `private void reset()` says nothing about which class was filtered away (`Owner::` keeps the key fact).
+    // A kind filter lists members flat, so the container that the tree would have carried has to be named — but only
+    // when it is a type. A namespace-level function's owner (`vibes::hip::blas`) is not a class the caller can select
+    // on, and printing it made every row read like a qualified name with no member on the end.
+    const typeOwners = new Set(
+        file.all
+            .filter(
+                (declaration) =>
+                    declaration.kind === "class" ||
+                    declaration.kind === "struct" ||
+                    declaration.kind === "union" ||
+                    declaration.kind === "interface" ||
+                    declaration.kind === "trait" ||
+                    declaration.kind === "enum",
+            )
+            .map((declaration) => declaration.qualifiedName),
+    );
     const lines = matched.map((declaration) => {
         const row = declarationLine(declaration, 0, {
             includeDefTag: isFunctionLike(declaration.kind),
         });
         const separator = declaration.qualifiedName.lastIndexOf("::");
+        const owner = separator === -1 ? "" : declaration.qualifiedName.slice(0, separator);
 
-        return separator === -1
-            ? row
-            : `${declaration.qualifiedName.slice(0, separator)}::  ${row}`;
+        return owner.length === 0 || !typeOwners.has(owner) ? row : `${owner}::  ${row}`;
     });
 
     return {
@@ -563,7 +581,7 @@ function digestFooter(
 function renderDirectoryMap(
     source: CodeSource,
     root: string,
-    files: readonly string[],
+    parsed: readonly ParsedFile[],
     limit: number,
     scope: string,
 ): string | undefined {
@@ -573,17 +591,20 @@ function renderDirectoryMap(
     >();
     const rootNames: string[] = [];
 
-    for (const file of files) {
-        const relative = path.relative(root, file);
+    for (const file of parsed) {
+        const relative = path.relative(root, file.path);
 
         if (relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
             continue;
         }
 
         const parts = relative.split(path.sep);
+        // A count is what makes the list answer "where is the code" and "which of these is worth opening": the
+        // fallback used to be names only, so the follow-up call was a guess between fourteen equally blank files.
+        const name = `${parts.at(-1) ?? relative} (${file.all.length})`;
 
         if (parts.length === 1) {
-            rootNames.push(path.basename(file));
+            rootNames.push(name);
 
             continue;
         }
@@ -601,22 +622,18 @@ function renderDirectoryMap(
         };
 
         entry.count += 1;
-        entry.names.push(parts.slice(1).join("/"));
-
-        const language = languageForPath(file);
-
-        if (language !== undefined) {
-            entry.languages.add(language);
-        }
-
+        entry.names.push(`${parts.slice(1, -1).concat(name).join("/")}`);
+        entry.languages.add(file.language);
         directories.set(directory, entry);
     }
 
     const displayRoot = source.displayPath(root);
-    const header = `# digest ${scopeLabel(scope)} · ${counted(files.length, "file")} · declarations exceed the ${limit}-char limit; showing the file list`;
+    const header = `# digest ${scopeLabel(scope)} · ${counted(parsed.length, "file")} · declarations exceed the ${limit}-char limit; showing the file list with declaration counts`;
 
     if (directories.size === 0) {
-        const names = files.map((file) => path.basename(file)).toSorted();
+        const names = parsed
+            .map((file) => `${path.basename(file.path)} (${file.all.length})`)
+            .toSorted();
         const shownNames = names.slice(0, 80);
         const lines = [header, ...shownNames.map((name) => `  ${name}`)];
 

@@ -82,7 +82,10 @@ describe("outline digest directory map", () => {
 
         expect(result.text).toContain("declarations exceed the");
         expect(result.text).toContain(".  2 files");
-        expect(result.text).toContain("gamma.ts queue.ts");
+        expect(result.text).toContain("gamma.ts (");
+        expect(result.text).toContain("queue.ts (");
+        // The count is what makes the map answerable: names alone leave the next call a guess.
+        expect(result.text).toMatch(/gamma\.ts \(\d+\)/);
         expect(result.text).toContain("a/  2 files");
         expect(result.text).toContain("alias.ts");
         expect(result.text).toContain("# deeper: outline digest src/a");
@@ -110,5 +113,43 @@ describe("outline digest directory map", () => {
 
         expect(result.text).toContain("declarations exceed the 400-char limit");
         expect(result.text).not.toContain("# visibility:");
+    });
+});
+
+describe("outline digest kind-filtered rows", () => {
+    it("does not put a namespace in front of a namespace-level function", async () => {
+        // `vibes::hip::blas::  [[nodiscard]] bool valid_dtype(...)` reads like a qualified name with no member on
+        // the end, and `show` cannot use it. Only a type owner is worth printing.
+        const source = new MemoryCodeSource("/project", {
+            "src/ops.cpp": [
+                "namespace vibes::hip {",
+                "void plain() {",
+                "}",
+                "",
+                "struct Ops {",
+                "    void member() {",
+                "    }",
+                "};",
+                "}",
+                "",
+            ].join("\n"),
+        });
+        const result = await runDigest(source, {
+            action: "digest",
+            path: "src/ops.cpp",
+            kind: "function",
+        });
+
+        expect(result.text).toContain("void plain()");
+        expect(result.text).not.toContain("vibes::hip::  void plain");
+
+        // A member still carries its type, which is the case the prefix exists for.
+        const members = await runDigest(source, {
+            action: "digest",
+            path: "src/ops.cpp",
+            kind: "method",
+        });
+
+        expect(members.text).toContain("Ops::");
     });
 });

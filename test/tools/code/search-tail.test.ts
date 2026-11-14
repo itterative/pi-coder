@@ -133,7 +133,7 @@ describe("outline search relevance tail", () => {
         expect(result.text).not.toContain("[related]");
     });
 
-    it("skips the tail when a doc comment already matched", async () => {
+    it("keeps a doc match first and appends the tail after it", async () => {
         let rankingCalls = 0;
         const semantic: SemanticSearch = {
             hint: "# semantic: enable semantic search with /outline semantic on",
@@ -152,12 +152,13 @@ describe("outline search relevance tail", () => {
             semantic,
         );
 
-        // A doc match means the prose mentions every content word of the query, so one row is an answer, and the
-        // tail would only spend an embedding to decorate it.
+        // A doc match is the answer, so it still leads; the dense channel runs anyway because it is cheap and it
+        // cannot know what the literal pass missed. Its rows decorate the answer instead of replacing it.
         expect(result.text).toContain("promote");
         expect(result.text).toContain("[doc]");
-        expect(rankingCalls).toBe(0);
-        expect(result.text).not.toContain("[related]");
+        expect(rankingCalls).toBe(1);
+        expect(result.text).toContain("[related]");
+        expect(result.text.indexOf("[doc]")).toBeLessThan(result.text.indexOf("[related]"));
     });
 
     it("leads with related rows when the doc tier only saw the words somewhere", async () => {

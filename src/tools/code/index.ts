@@ -26,7 +26,13 @@ import {
     semanticRoot,
     writeConsent,
 } from "./semantic/config";
-import { buildIndex, countEmbeddings, createSemanticSearch, ensureIndexMetadata } from "./semantic";
+import {
+    buildIndex,
+    countEmbeddings,
+    createSemanticSearch,
+    ensureIndexMetadata,
+    takeEmbedNotice,
+} from "./semantic";
 import { projectRoots, refreshOnce, scanRoot } from "./semantic/refresh";
 import { buildConcurrency, refreshConcurrency } from "./semantic/runtime";
 import {
@@ -169,6 +175,11 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
                         ? await timing.measure("semantic", () => prepareSemantic(ctx))
                         : undefined;
                 const result = await dispatchAction(source, effective, signal, semantic, timing);
+                const notice = takeEmbedNotice();
+
+                if (notice !== undefined) {
+                    ctx.ui.notify(notice, "warning");
+                }
 
                 return {
                     content: [{ type: "text", text: result.text }],

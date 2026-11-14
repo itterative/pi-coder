@@ -373,16 +373,23 @@ async function scanFile(
         // A declaration of the member itself is qualified by its own name, not by an enclosing scope: the definition
         // of `CallList::attention_paged` sits at namespace scope, and walking outward would find no type at all.
         const declared = definitions.get(entry.startIndex);
-        const matchedType =
+        const inNamedType =
             declared === undefined
                 ? matchesEnclosingType(index.scopes, entry.startIndex, expectedType)
                 : qualifiedNameHasParent(declared.qualifiedName, expectedType);
+        const text = shortLine(lines[entry.line - 1] ?? "");
+        // The row's own text can name the qualified type even when the enclosing declaration does not: `OpId::gemm`
+        // inside `register_gemm` is exactly what the caller asked for, and tagging it `[name-only]` said the opposite.
+        const namesType =
+            expectedType !== undefined &&
+            text.replace(/\s+/g, "").toLowerCase().includes(`${expectedType}::`);
+        const matchedType = inNamedType || namesType;
         const group = scopes.get(scope) ?? { name: scope, matchedType, occurrences: [] };
 
         group.occurrences.push({
             line: entry.line,
             column: entry.column,
-            text: shortLine(lines[entry.line - 1] ?? ""),
+            text,
             tag: entry.tag,
         });
         group.matchedType ||= matchedType;

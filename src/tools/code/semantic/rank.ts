@@ -2,19 +2,6 @@ import type { CommentBlock } from "../comment-blocks";
 import type { CodeChunk } from "./chunks";
 import type { Declaration, ParsedFile } from "../types";
 
-/** Below this many name/doc matches, a lexical-led answer may still want a related tail. */
-export const TAIL_MIN_LITERAL = 3;
-
-/**
- * Whether the related channel is worth its cost when a *strong* lexical hit already leads.
- *
- * Only for the lexical-led case: a name or phrase match is an answer, so related rows may at most decorate it, and
- * only when the literal pass found little (`TAIL_MIN_LITERAL`) and no prose matched every content word.
- */
-export function wantsTail(literalCount: number, docMatches: number): boolean {
-    return literalCount < TAIL_MIN_LITERAL && docMatches === 0;
-}
-
 /**
  * Whether this query should be answered by similarity first, with the lexical rows after it.
  *
@@ -25,8 +12,9 @@ export function wantsTail(literalCount: number, docMatches: number): boolean {
  * the time where similarity ranking did it 61% (MRR 0.212 against 0.706). So for those queries the related rows lead
  * and the lexical ones follow.
  *
- * This costs one query embedding per search with no strong lexical hit — measured 51–69 ms warm on the native runtime
- * — which is why the dense channel is no longer only a tail.
+ * This costs one query embedding per search — measured 51–69 ms warm on the native runtime. The tail itself is no
+ * longer gated on how little the literal pass found: that embedding has already been paid for, and the literal pass
+ * cannot see what it missed. So the channel runs on every search, and this function only decides where its rows go.
  */
 export function leadsWithRelated(strongMatch: boolean): boolean {
     return !strongMatch;

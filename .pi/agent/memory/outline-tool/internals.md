@@ -25,7 +25,9 @@ keep_updated: true
   formatter. Body walkers also extract inner functions and arrow/function constants (JS/TS), named lambdas (C++),
   and Python nested `def`s. Module-level bindings are declarations too: JS/TS `const`/`let`, Go/Rust/Java/C#/PHP
   constants, Python module assignments, and Ruby capitalised constants (a lowercase Ruby assignment is a local).
-  Nested names are `outer::inner`.
+  Nested names are `outer::inner`. `parseErrors` is tree-sitter's own `ERROR`/`MISSING` count, so a grammar gap
+  shows as a `# parse:` footer: a TypeScript call with `typeof import("…")` in its type arguments
+  (`importOriginal<typeof import("./x")>()`) is valid TS that the grammar marks at `>()`.
 - **No persistent index.** Parsed files live in a disposable 2Q cache (2,000 entries / 64 MiB, keyed by path +
   mtime + size); eviction only costs a reparse. Search hits and the usage index hang off `ParsedFile` in
   `WeakMap`s, so a changed file drops them with the object.

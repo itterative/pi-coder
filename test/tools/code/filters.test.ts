@@ -146,7 +146,71 @@ describe("outline path pattern filter", () => {
     });
 });
 
+describe("outline kind aliases across languages", () => {
+    function source(): MemoryCodeSource {
+        return new MemoryCodeSource("/project", {
+            "src/k.hpp": [
+                "struct Buffer {",
+                "    int size;",
+                "};",
+                "",
+                "class Pool {",
+                "    int count;",
+                "};",
+                "",
+            ].join("\n"),
+        });
+    }
+
+    it("treats struct and union as classes, because C++ has no class keyword for them", async () => {
+        const result = await runSearch(source(), {
+            action: "search",
+            path: "src",
+            query: "Buffer",
+            kind: "class",
+        });
+
+        expect(result.text).toContain("Buffer");
+        expect(result.text).toContain("kind=class");
+    });
+
+    it("names the kinds the tree does contain when a filter hides everything", async () => {
+        const result = await runSearch(source(), {
+            action: "search",
+            path: "src",
+            query: "nothinghere",
+            kind: "enum",
+        });
+
+        expect(result.text).toContain("kinds here: field 2");
+        expect(result.text).toContain("struct 1");
+    });
+
+    it("leads the histogram with the kinds that would answer a near-miss filter", async () => {
+        const result = await runSearch(source(), {
+            action: "search",
+            path: "src",
+            query: "nothinghere",
+            kind: "class",
+        });
+
+        // The point of the histogram is the word the caller can retry with, not the most numerous kind.
+        expect(result.text).toMatch(/kinds here: struct \d+/);
+    });
+});
+
 describe("outline kind filter", () => {
+    it("leads a method histogram with functions, the kind that would answer it", async () => {
+        const result = await runSearch(source(), {
+            action: "search",
+            path: ".",
+            query: "nothinghere",
+            kind: "method",
+        });
+
+        // Sorting by count alone would list whatever is most numerous; a `method` filter is answered by `function`.
+        expect(result.text).toMatch(/kinds here: function \d+/);
+    });
     it("keeps only matching declaration rows in search", async () => {
         const result = await runSearch(source(), {
             action: "search",

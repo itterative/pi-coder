@@ -3,13 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
     buildConcurrency,
     createEmbedRuntime,
     MAX_TEXT_CHARS,
     refreshConcurrency,
+    type EmbedRuntimeEvent,
 } from "../../../src/tools/code/semantic/runtime";
 import {
     devicePreference,
@@ -587,7 +588,13 @@ describe("the embedding runtime", () => {
         process.env.FAKE_LLAMA_FAIL_GPU = "1";
         resetLlamaDevice();
 
-        const runtime = createEmbedRuntime({ modelDir: double.dir });
+        const events: EmbedRuntimeEvent[] = [];
+        const stderr = vi.spyOn(process.stderr, "write");
+        const runtime = createEmbedRuntime({
+            modelDir: double.dir,
+            onEvent: (event) => events.push(event),
+        });
+        let stderrWrites: string[];
 
         try {
             const built = await runtime.build(
@@ -600,7 +607,20 @@ describe("the embedding runtime", () => {
             expect(double.served()).toHaveLength(1);
         } finally {
             runtime.dispose();
+            // Captured before the restore, which clears the spy's history.
+            stderrWrites = stderr.mock.calls.map(([chunk]) => String(chunk));
+            stderr.mockRestore();
         }
+
+        // The child's own line reaches the caller as an event, which is what makes it loggable.
+        expect(
+            events.some(
+                (event) => event.kind === "server-output" && event.text.includes("Vulkan buffer"),
+            ),
+        ).toBe(true);
+        expect(events.some((event) => event.kind === "device-fallback")).toBe(true);
+        // A raw stderr write is not captured by pi and would paint over the TUI, so the fallback must not use one.
+        expect(stderrWrites.filter((text) => text.includes("semantic:"))).toEqual([]);
     });
 
     it("surfaces a server that exits instead of topping out on a health timeout", async () => {

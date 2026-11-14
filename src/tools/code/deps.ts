@@ -132,7 +132,9 @@ export async function runDeps(
         subject.language,
     ].join(" · ");
     const blocks = [importBlock(imports, source), dependentBlock(dependents, source, root)];
-    const fitted = renderWithinBudget(header, blocks, limit, offset);
+    const fitted = renderWithinBudget(header, blocks, limit, offset, {
+        blockTitles: ["imports", "dependents"],
+    });
     const next = nextOffsetNote(fitted);
     const footer = footerFor({
         discoveryTruncated: discovery.truncated,

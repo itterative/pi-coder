@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { SEMANTIC_LOG_PATH } from "../../../common/constants";
+import {
+    createJsonlRecordLog,
+    type EnvelopeRecord,
+    type RecordLog,
+} from "../../../common/record-log";
 import { artifactsPresent } from "./artifacts";
 import { rankBm25 } from "./bm25";
 import { chunkKeyOf, chunksOf, type CodeChunk } from "./chunks";
@@ -14,6 +20,7 @@ import {
     splitJobs,
     type BuildFile,
     type EmbedRuntime,
+    type EmbedRuntimeEvent,
 } from "./runtime";
 import {
     cosine,
@@ -171,6 +178,72 @@ const refreshing = new Map<string, Promise<void>>();
  */
 const runtimes = new Map<string, EmbedRuntime>();
 
+/** One JSONL record per runtime diagnostic; `llama-server`'s own startup and inference lines land here. */
+interface SemanticLogRecord extends EnvelopeRecord {
+    v: 1;
+    kind: EmbedRuntimeEvent["kind"];
+    preference?: string;
+    device?: "cpu" | "vulkan";
+    message?: string;
+    text?: string;
+}
+
+let semanticLog: RecordLog<SemanticLogRecord> | undefined;
+let pendingNotice: string | undefined;
+const noticesShown = new Set<string>();
+const LOG_DISABLED_VALUES = new Set(["0", "false", "no", "off"]);
+
+function semanticLogDisabled(): boolean {
+    return LOG_DISABLED_VALUES.has((process.env.OUTLINE_SEMANTIC_LOG ?? "").trim().toLowerCase());
+}
+
+/**
+ * Where runtime diagnostics go, instead of the terminal.
+ *
+ * The device fallback also queues a one-shot notice for the tool to surface through `ctx.ui.notify`: a GPU that
+ * cannot start is worth saying once, but a raw stderr write is not, because pi does not capture it and it paints
+ * over the TUI. A repeated message is logged again and not notified again.
+ */
+function recordEmbedEvent(event: EmbedRuntimeEvent): void {
+    if (!semanticLogDisabled()) {
+        semanticLog ??= createJsonlRecordLog<SemanticLogRecord>({
+            filePath: SEMANTIC_LOG_PATH,
+            maxBytes: 4 * 1024 * 1024,
+            generations: 3,
+        });
+        const ts = new Date().toISOString();
+
+        semanticLog.append(
+            event.kind === "device-fallback"
+                ? {
+                      v: 1,
+                      ts,
+                      kind: event.kind,
+                      preference: event.preference,
+                      message: event.message,
+                  }
+                : { v: 1, ts, kind: event.kind, device: event.device, text: event.text },
+        );
+    }
+
+    if (event.kind === "device-fallback" && !noticesShown.has(event.message)) {
+        pendingNotice = event.message;
+    }
+}
+
+/** The one degraded-mode notice the next tool call should surface, if the runtime produced a new one. */
+export function takeEmbedNotice(): string | undefined {
+    const notice = pendingNotice;
+
+    pendingNotice = undefined;
+
+    if (notice !== undefined) {
+        noticesShown.add(notice);
+    }
+
+    return notice;
+}
+
 /** The shared runtime for a model dir. Constructing it does not spawn anything; the child is lazy. */
 export function sharedEmbedRuntime(modelDir: string): EmbedRuntime {
     const existing = runtimes.get(modelDir);
@@ -179,7 +252,7 @@ export function sharedEmbedRuntime(modelDir: string): EmbedRuntime {
         return existing;
     }
 
-    const created = createEmbedRuntime({ modelDir });
+    const created = createEmbedRuntime({ modelDir, onEvent: recordEmbedEvent });
 
     runtimes.set(modelDir, created);
 

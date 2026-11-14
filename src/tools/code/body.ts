@@ -143,7 +143,15 @@ function bodyHitsForFile(file: ParsedFile, query: BodyQuery, anchor: string): Bo
         }
 
         const phrase = query.phrase.length > 0 && normalizeText(lowerBody).includes(query.phrase);
-        const evidence = evidenceFor(body, range.startLine, anchor, query.tokens);
+
+        // A quoted query is a phrase request, enforced here as well as in the doc and comment channels: matching
+        // its words in any order while the caller asked for adjacency is how a phrase search came back with rows
+        // that did not contain the phrase.
+        if (query.quoted && !phrase) {
+            continue;
+        }
+
+        const evidence = evidenceFor(body, range.startLine, anchor, query.tokens, query.phrase);
 
         if (evidence === undefined) {
             continue;
@@ -167,19 +175,42 @@ function evidenceFor(
     startLine: number,
     anchor: string,
     tokens: readonly string[],
+    phrase: string,
 ): BodyHit["evidence"] | undefined {
     const lines = body.split("\n");
+    let anchorLine: number | undefined;
+    let tokenLine: number | undefined;
 
     for (let index = 0; index < lines.length; index += 1) {
         const line = lines[index] ?? "";
         const lower = line.toLowerCase();
 
-        if (tokens.some((token) => lower.includes(token))) {
-            return { line: startLine + index, text: line.replace(/\s+/g, " ").trim() };
+        // The evidence line must be the one the query hits: a phrase first, then the query's longest word, and only
+        // then any word, so a row cannot show boilerplate the query has nothing to do with.
+        if (phrase.length > 0 && normalizeText(line).includes(phrase)) {
+            return { line: startLine + index, text: collapse(line) };
+        }
+
+        if (anchorLine === undefined && lower.includes(anchor)) {
+            anchorLine = index;
+        }
+
+        if (tokenLine === undefined && tokens.some((token) => lower.includes(token))) {
+            tokenLine = index;
         }
     }
 
-    return undefined;
+    const chosen = anchorLine ?? tokenLine;
+
+    if (chosen === undefined) {
+        return undefined;
+    }
+
+    return { line: startLine + chosen, text: collapse(lines[chosen] ?? "") };
+}
+
+function collapse(line: string): string {
+    return line.replace(/\s+/g, " ").trim();
 }
 
 /**

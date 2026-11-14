@@ -69,7 +69,7 @@ describe("outline search body text", () => {
         expect(result.text).toContain("[body]");
         // The evidence line, not just the declaration: the throw is on line 6 of the fixture.
         expect(result.text).toMatch(/:6 {2}throw new Error\(`\$\{spec\} failed its checksum`\);/);
-        expect(result.text).toContain("# body: the declaration that contains the text");
+        expect(result.text).toContain("# body: the row names the declaration");
     });
 
     it("does not body-match a single-word identifier query", async () => {
@@ -176,5 +176,26 @@ describe("outline search body text", () => {
 
         expect(result.text).toContain("[doc]");
         expect(result.text).not.toContain("[body]");
+    });
+
+    it("shows the line the query hits, not the first line holding any of its words", async () => {
+        const source = new MemoryCodeSource("/project", {
+            "src/dl.ts": [
+                "export function download(spec: string): void {",
+                "    // failed requests are retried by the caller",
+                "    throw new Error(`checksum failed: ${spec}`);",
+                "}",
+                "",
+            ].join("\n"),
+        });
+        const result = await runSearch(source, {
+            action: "search",
+            path: "src",
+            query: "failed checksum",
+        });
+
+        // Line 2 holds "failed" and no "checksum"; the longest query word is the better evidence line.
+        expect(result.text).toMatch(/:3 {2}throw new Error/);
+        expect(result.text).not.toMatch(/:2 {2}\/\/ failed requests/);
     });
 });

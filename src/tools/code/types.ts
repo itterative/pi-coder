@@ -59,6 +59,24 @@ export function isDeclarationKind(value: string): value is DeclarationKind {
 }
 
 /**
+ * Whether a declaration satisfies a kind filter.
+ *
+ * `class` is the one kind that is a language-family question rather than a syntax one: TypeScript writes `class`,
+ * C++ writes `struct` for the same thing, and Rust has `struct` with no `class` at all. A caller who asks for classes
+ * on a C++ tree means the types, so the filter folds them together; the narrower names still select themselves.
+ */
+export function matchesDeclarationKind(
+    actual: DeclarationKind,
+    requested: DeclarationKind,
+): boolean {
+    if (actual === requested) {
+        return true;
+    }
+
+    return requested === "class" && (actual === "struct" || actual === "union");
+}
+
+/**
  * One `kind` parameter serving two disjoint axes: declaration kinds for `digest`/`search`, occurrence classes for
  * `usages`. The value sets do not overlap, so the action routes the value without a second parameter.
  */

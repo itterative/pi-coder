@@ -96,3 +96,40 @@ describe("outline search phrase handling", () => {
         expect(result.text).toContain("raise limit to fit more per call");
     });
 });
+
+describe("outline search quoted body text", () => {
+    /**
+     * Both files hold every word of the query; only one holds them adjacent.
+     *
+     * `pageOf(table)` is how the scattered file says "page" and "table", and the body channel used to treat a quoted
+     * query as those words in any order — so a phrase search returned a file that did not contain the phrase.
+     */
+    function source(): MemoryCodeSource {
+        return new MemoryCodeSource("/project", {
+            "src/scattered.ts": [
+                "export function pageOf(table: number): number {",
+                "    return table + 1;",
+                "}",
+                "",
+            ].join("\n"),
+            "src/phrase.ts": [
+                "export function walk(): string {",
+                '    return "one page table entry";',
+                "}",
+                "",
+            ].join("\n"),
+        });
+    }
+
+    it("requires adjacency in a body, not just the words", async () => {
+        const result = await runSearch(source(), {
+            action: "search",
+            path: "src",
+            query: '"page table"',
+        });
+
+        expect(result.text).toContain("phrase.ts");
+        expect(result.text).not.toContain("scattered.ts");
+        expect(result.text).toContain("[body]");
+    });
+});

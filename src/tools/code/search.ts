@@ -11,6 +11,7 @@ import { collectCommentHits } from "./comment-search";
 import { discoverFiles, filterPathTarget, parsePathTarget, patternWithinTarget } from "./discovery";
 import {
     bodyThenFooter,
+    declarationKindCounts,
     discoveryCapNote,
     filterNote,
     isContainer,
@@ -32,12 +33,18 @@ import { withinLine, withinResolution, withinScope } from "./scope";
 import { tokenize } from "./semantic/bm25";
 import { stem } from "./stem";
 import type { CodeChunk } from "./semantic/chunks";
-import { TAIL_ROWS, declarationKey, leadsWithRelated, rankKeyOf, wantsTail } from "./semantic/rank";
+import { TAIL_ROWS, declarationKey, leadsWithRelated, rankKeyOf } from "./semantic/rank";
 import type { SemanticSearch } from "./semantic/types";
 import type { CodeSource } from "./source";
 import { declarationDoc, normalizeText } from "./text";
 import { CallTiming } from "./timing";
-import { isDeclarationKind, type CodeToolParams, type Declaration, type ParsedFile } from "./types";
+import {
+    isDeclarationKind,
+    matchesDeclarationKind,
+    type CodeToolParams,
+    type Declaration,
+    type ParsedFile,
+} from "./types";
 
 export interface SearchResult {
     text: string;
@@ -252,7 +259,7 @@ export async function runSearch(
     const kind =
         params.kind !== undefined && isDeclarationKind(params.kind) ? params.kind : undefined;
     const matchesKind = (declaration: Declaration): boolean =>
-        kind === undefined || declaration.kind === kind;
+        kind === undefined || matchesDeclarationKind(declaration.kind, kind);
     // A comment row carries no declaration kind, so a kind filter excludes it rather than guessing.
     const ownsKind = (hit: SearchHit): boolean =>
         hit.declaration === undefined ? kind === undefined : matchesKind(hit.declaration);
@@ -320,9 +327,10 @@ export async function runSearch(
     const leads = leadsWithRelated(strongMatch);
     // A typo of an identifier is precise evidence too, so a fuzzy result keeps priority over related rows; a
     // lexical-led answer still takes a related tail when it is thin, exactly as before.
-    const wantsRelated =
-        fuzzyHits.length === 0 &&
-        (leads || wantsTail(literalRows.length + bodyMatches + commentMatches, docMatches));
+    // The dense channel runs on every search: a warm query embedding is under 100 ms, and the literal pass cannot know
+    // what it failed to find. A name or body hit still leads (`leads`), so the tail only ever decorates an answer that
+    // already had evidence.
+    const wantsRelated = wantsRelatedChannel(query, fuzzyHits.length);
     const related = wantsRelated
         ? (
               await timing.measure("tail", () =>
@@ -356,6 +364,7 @@ export async function runSearch(
         pathHidden: targeted.hidden,
         kind,
         kindHidden: hiddenTotal,
+        kindCounts: kind === undefined ? undefined : declarationKindCounts(parsed),
     });
     const within = scoped === undefined ? undefined : withinLine(source, scoped.scope);
 
@@ -878,7 +887,7 @@ function renderHit(source: CodeSource, hit: SearchHit): string {
             return `${location}  comment  "${hit.comment.lead}"${channel}`;
         }
 
-        const count = evidence.count > 1 ? `  ×${evidence.count}` : "";
+        const count = evidence.count > 1 ? `  (×${evidence.count} in block)` : "";
 
         return `${location}  comment${channel}${count}\n  :${evidence.line}  ${shortLine(undecoratedComment(evidence.text))}`;
     }
@@ -896,7 +905,7 @@ function renderHit(source: CodeSource, hit: SearchHit): string {
     const row = `${columns.join("  ")}${tag}${channel}${approximate}`;
 
     if (hit.body !== undefined) {
-        const count = hit.body.count > 1 ? `  ×${hit.body.count}` : "";
+        const count = hit.body.count > 1 ? `  (×${hit.body.count} in body)` : "";
 
         return `${row}\n  :${hit.body.line}  ${shortLine(hit.body.text)}${count}`;
     }
@@ -1093,6 +1102,17 @@ function declarationTag(declaration: Declaration): string {
     return declaration.isDefinition ? " [def]" : " [decl]";
 }
 
+/**
+ * Whether the dense channel runs for this query.
+ *
+ * Every query runs it: a warm query embedding is 51–69 ms, and the literal channels cannot see what they missed. Two
+ * shapes are not questions and skip it — a typo of an identifier (the corrected name is the answer, and precise
+ * evidence outranks a similarity guess) and a one-character query (a substring request, not a topic).
+ */
+function wantsRelatedChannel(query: ParsedQuery, fuzzyCount: number): boolean {
+    return fuzzyCount === 0 && query.raw.replace(/"/g, "").length > 1;
+}
+
 function headerFor(
     scope: string,
     fileTotal: number,
@@ -1196,7 +1216,7 @@ function footerFor(options: {
 
     if (options.bodyMatches > 0) {
         footer.push(
-            "# body: the declaration that contains the text, not the line · outline show returns it whole · line-level hits, regex, and counts stay with rg",
+            "# body: the row names the declaration; the line under it is the one the query hits, and ×N counts the word in that body · outline show returns the declaration whole · line-level hits, regex, and counts stay with rg",
         );
     }
 
@@ -1213,7 +1233,7 @@ function footerFor(options: {
                 : "";
 
         footer.push(
-            `# comment: prose no declaration owns — a file header or a note between statements · the row quotes the matching line, and the span is what read wants${withheld}`,
+            `# comment: prose no declaration owns — a file header or a note between statements · the line under the row is the one the query hits, and ×N counts the word in that block${withheld}`,
         );
     }
 

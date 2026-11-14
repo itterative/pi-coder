@@ -13,10 +13,11 @@ the one below it, and a lower layer never displaces a higher one.
 | 5    | BM25 over name + doc + signature         | nothing                 | _related_: ranked by relevance         |
 | 6    | embedding cosine, fused with BM25 by RRF | opt-in download + index | _related_                              |
 
-Tiers 0–4 are the literal pass. Tier 5–6 is the **relevance tail**; it runs only when the literal pass produced
-fewer than `TAIL_MIN_LITERAL` (3) rows. A fuzzy identifier match (Damerau, ≤2 edits) pre-empts the tail: a typo of
-an identifier is precise evidence, a relevance guess is not, so when one exists the tail does not run at all. Tail
-rows carry `[related]` and a footer saying they were ranked rather than matched.
+Tiers 0–4 are the literal pass. Tier 5–6 is the **relevance tail**; it runs on every query now, because a warm query
+embedding is under 100 ms. A strong literal answer still leads and the tail follows it, so the rows can only decorate
+an answer rather than displace it. Two shapes skip the tail: a fuzzy identifier match (Damerau, ≤2 edits — a typo of an
+identifier is precise evidence, a relevance guess is not) and a one-character query (a substring request). Tail rows
+carry `[related]` and a footer saying they were ranked rather than matched.
 
 ## Literal body text
 
@@ -271,7 +272,8 @@ Two things follow, and both are worth knowing before trusting the label:
 - **Dense added nothing on the rows that mattered.** BM25 already ranked the answer first in every answered case,
   because a partial term overlap is enough for a _tail_ (the tail does not require every token, only the doc tier
   does). What hybrid reliably changes is the row _count_: the dense list scores every declaration, so RRF fills the
-  tail to `TAIL_ROWS` (8) where BM25 returned one row. That is the cost the `wantsTail` gate exists to contain.
+  tail to `TAIL_ROWS` (8) where BM25 returned one row. That is no longer a cost that a gate has to contain: the
+  channel runs every time, and the row cap is the only budget.
 - **A score floor is not available.** Cosines are compressed into 0.6–0.75 for this model and corpus: the best row
   for a query with _no_ answer (0.680) outscores the seventh row of a query that has one (0.622). Absolute thresholds
   therefore cannot separate relevance here, and a relative margin is one fixture's guess. The honest signals stay the

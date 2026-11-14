@@ -53,6 +53,15 @@ export const BASH_DECISION_LOG_PATH = path.join(PI_CODER_STATE_DIR, "bash-log.js
 export const COMPACTION_TRACE_PATH = path.join(PI_CODER_STATE_DIR, "compaction-trace.jsonl");
 
 /**
+ * Diagnostics from the outline embedding runtime: `llama-server`'s own output and the device fallbacks.
+ *
+ * Never the terminal. pi does not capture raw stream writes, so a `process.stderr.write` from an extension paints
+ * over the TUI; this file is where a server that failed to start can be read afterwards instead. pi-coder runtime
+ * state like the other logs; disable with `OUTLINE_SEMANTIC_LOG=0`.
+ */
+export const SEMANTIC_LOG_PATH = path.join(PI_CODER_STATE_DIR, "semantic-log.jsonl");
+
+/**
  * The pi sessions directory every transcript for this agent dir is written to.
  *
  * Resolved through pi's own agent dir rather than a hardcoded `~/.pi/agent`, so a config that moved

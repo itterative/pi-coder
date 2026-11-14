@@ -107,4 +107,28 @@ int CallList::run_one(const Ops& ops) {
         expect(result.text).not.toContain("[name-only]");
         expect(result.text).not.toContain("enclosing type");
     });
+
+    it("does not mark a reference that spells the qualified type itself", async () => {
+        // `OpId::gemm` inside a free function is exactly what was asked for; only the enclosing declaration is not
+        // `OpId`. Tagging these `[name-only]` said the qualifier had been ignored when every row contained it.
+        const source = new MemoryCodeSource("/project", {
+            "src/registry.cpp": [
+                "enum class OpId { gemm, other };",
+                "",
+                "void register_ops() {",
+                "    add(OpId::gemm);",
+                "}",
+                "",
+            ].join("\n"),
+        });
+        const result = await runUsages(source, {
+            action: "usages",
+            path: "src",
+            query: "OpId::gemm",
+            kind: "ref",
+        });
+
+        expect(result.text).toContain("OpId::gemm");
+        expect(result.text).not.toContain("[name-only]");
+    });
 });

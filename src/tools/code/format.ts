@@ -1,5 +1,11 @@
 import { MAX_FILES } from "./languages";
-import type { Declaration, DeclarationKind, DeclarationRange, SymbolSelector } from "./types";
+import type {
+    Declaration,
+    DeclarationKind,
+    DeclarationRange,
+    ParsedFile,
+    SymbolSelector,
+} from "./types";
 
 /** Parse `ns::Type::member(const X&)` into a name selector plus an optional parameter-type hint. */
 export function parseSelector(raw: string): SymbolSelector {
@@ -259,6 +265,8 @@ export function filterNote(options: {
     pathHidden?: number;
     kind?: DeclarationKind;
     kindHidden?: number;
+    /** What the filtered files actually contain, so a filter that hid everything says what is there instead. */
+    kindCounts?: ReadonlyMap<DeclarationKind, number>;
 }): string | undefined {
     const parts: string[] = [];
     const target = options.path?.trim() ?? "";
@@ -268,10 +276,78 @@ export function filterNote(options: {
     }
 
     if (options.kind !== undefined) {
-        parts.push(`kind=${options.kind}${hiddenSuffix(options.kindHidden ?? 0, "declaration")}`);
+        parts.push(
+            `kind=${options.kind}${hiddenSuffix(options.kindHidden ?? 0, "declaration")}${histogramSuffix(options.kindCounts, options.kind)}`,
+        );
     }
 
     return parts.length === 0 ? undefined : `# filter: ${parts.join(" · ")}`;
+}
+
+/**
+ * The kinds that answer a near-miss filter, nearest first.
+ *
+ * `kind=class` on a C++ tree was the motivating case: a histogram sorted by count listed `function 427, field 150`
+ * first and never reached `struct`, which is the only word the caller can act on.
+ */
+const RELATED_KINDS = new Map<DeclarationKind, readonly DeclarationKind[]>([
+    ["class", ["struct", "union", "interface", "trait"]],
+    ["struct", ["class", "union"]],
+    ["union", ["struct", "class"]],
+    ["interface", ["trait", "class"]],
+    ["trait", ["interface", "class"]],
+    ["enum", ["enumMember"]],
+    ["enumMember", ["enum"]],
+    ["function", ["method", "constructor", "operator"]],
+    ["method", ["function", "operator"]],
+    ["field", ["variable"]],
+    ["variable", ["field"]],
+    ["typeAlias", ["class", "struct"]],
+]);
+
+/**
+ * The largest kind groups behind a filter, related kinds first.
+ *
+ * `kind=class` returning nothing over 83 hidden declarations is a dead end unless the answer says the tree is made of
+ * `struct`s: the histogram is what turns the filter hint into the next call. Ordering by relevance to the requested
+ * kind rather than by count is what makes the type kinds visible on a tree with hundreds of functions.
+ */
+function histogramSuffix(
+    counts: ReadonlyMap<DeclarationKind, number> | undefined,
+    requested: DeclarationKind | undefined,
+): string {
+    if (counts === undefined) {
+        return "";
+    }
+
+    const related = requested === undefined ? [] : (RELATED_KINDS.get(requested) ?? []);
+    const present = [...counts.entries()].filter(([, count]) => count > 0);
+    const ordered = [
+        ...related.flatMap((kind) => {
+            const count = counts.get(kind) ?? 0;
+
+            return count > 0 ? [[kind, count] as const] : [];
+        }),
+        ...present
+            .filter(([kind]) => !related.includes(kind))
+            .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0])),
+    ];
+    const top = ordered.slice(0, 3).map(([kind, count]) => `${kind} ${count}`);
+
+    return top.length === 0 ? "" : ` · kinds here: ${top.join(", ")}`;
+}
+
+/** Every declaration kind in the parsed files, with its count. */
+export function declarationKindCounts(files: readonly ParsedFile[]): Map<DeclarationKind, number> {
+    const counts = new Map<DeclarationKind, number>();
+
+    for (const file of files) {
+        for (const declaration of file.all) {
+            counts.set(declaration.kind, (counts.get(declaration.kind) ?? 0) + 1);
+        }
+    }
+
+    return counts;
 }
 
 /**
@@ -542,6 +618,7 @@ export function renderWithinBudget(
     blocks: readonly string[],
     limit: number,
     offset = 0,
+    options: { blockTitles?: readonly string[] } = {},
 ): BudgetedText {
     const startOffset = Math.max(0, Math.floor(offset));
     const laid = layBlocks(blocks);
@@ -574,7 +651,11 @@ export function renderWithinBudget(
             return noContent(header, startOffset);
         }
 
-        const suffix = block.lines.slice(position.intra).join("\n");
+        // A page that starts mid-block has lost that block's heading, so the rows arrive with nothing saying what
+        // they are. Callers with titled blocks name them; the heading is reprinted at the top of the continuation.
+        const title = options.blockTitles?.[index];
+        const label = title === undefined ? "" : `${title}\n`;
+        const suffix = `${label}${block.lines.slice(position.intra).join("\n")}`;
         const cost = suffix.length + 1;
         const fitted = takeLines(suffix, Math.max(0, limit - used - 1), used);
 
@@ -691,7 +772,7 @@ export function nextOffsetNote(fitted: BudgetedText): string | undefined {
     }
 
     const scope =
-        fitted.remaining > 0 ? ` · ${fitted.remaining} of ${fitted.total} line(s) left` : "";
+        fitted.remaining > 0 ? ` · ${fitted.remaining} of ${fitted.total} body line(s) left` : "";
 
     return `# next: offset=${fitted.nextOffset}${scope} · raise limit to fit more per call`;
 }
