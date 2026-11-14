@@ -614,6 +614,38 @@ describe("decision evaluator subjects", () => {
         });
     });
 
+    it("skips a trusted skill body and folds it read_only", async () => {
+        const trustedPath = "/opt/pi-coder/skills/session-review/scripts/session-transcript.mts";
+        const { evaluator, classify } = harness({
+            behavior: bySubject({
+                scripts: { "print(1)": { capability: "writes_outside" } },
+            }),
+        });
+        const context = scriptContext();
+        context.script = {
+            kind: "file",
+            artifacts: [{ source: trustedPath, path: trustedPath, text: "print(1)" }],
+        };
+
+        const verdict = await evaluator.evaluate(context);
+
+        // Only the command is sent: the trusted body is never read by the model.
+        expect(classify).toHaveBeenCalledTimes(1);
+        expect(classify.mock.calls[0]?.[1].state.script_capabilities).toEqual([
+            { source: trustedPath, capability: "read_only" },
+        ]);
+        expect(verdict.forms).toMatchObject([
+            { subject: "command", status: "answered" },
+            {
+                subject: "script",
+                source: trustedPath,
+                criterion: "read_only",
+                action: "host",
+                status: "trusted",
+            },
+        ]);
+    });
+
     it("folds a dangerous capability into the command's verdict", async () => {
         const { evaluator } = harness({
             behavior: bySubject({

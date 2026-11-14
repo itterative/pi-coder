@@ -25,6 +25,11 @@ folds with it is in [scope-suggestion.md](scope-suggestion.md).
 - A script verdict is a **property of the code**, not the invocation: `scriptRequest(body)` sends `{code}`
   alone under one `script` choice with capability criteria, cached by `sha256(body)` — a rename or touch hits,
   any byte edit misses.
+- **Trusted skills** (`trusted-scripts.ts`): a static `TRUSTED_SKILLS` list of skill directory names
+  (`session-review`) whose bodies are never sent. A file artifact under `skills/<name>/` folds as a synthetic
+  `read_only` outcome with `status: "trusted"`, no request and no cache entry, while the command is still
+  classified and still gates `host` on its own confidence. `test/modules/decision/trusted-scripts.test.ts`
+  scans the bundled `skills/` tree and fails when a script's skill is not on the list.
 - `SCRIPT_ACTION_TABLE`: `read_only`/`writes_files`/`network → host`; `writes_outside`/`privileged → sandbox`;
   `destructive`/`remote_code`/`process_control → refuse`.
 - The command is classified separately as an invocation whose state carries the capability summaries.

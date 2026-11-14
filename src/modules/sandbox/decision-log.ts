@@ -121,7 +121,7 @@ export interface BashClassifierScriptAnswerRecord {
     /** action the criterion maps to, before the fold */
     action?: string;
     confidence?: number;
-    /** how this body's request ended: `answered`, `cached`, `error`, `timeout`, or an abstain form */
+    /** how this body's request ended: `answered`, `cached`, `error`, `timeout`, `trusted`, or an abstain form */
     status: string;
 }
 

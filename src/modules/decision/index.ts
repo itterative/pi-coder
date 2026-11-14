@@ -137,6 +137,7 @@ export {
     scriptFileIdentity,
     type ScriptRunOptions,
 } from "./script";
+export { TRUSTED_SKILLS, trustedSkillForScript } from "./trusted-scripts";
 export {
     SCRIPT_ACTION_TABLE,
     SCRIPT_CRITERIA,

@@ -19,7 +19,13 @@ import {
 import { decideWithPolicy, foldAnswers, type FoldableAnswer } from "./policy";
 import { scopeAnswer } from "./scope";
 import { scriptContentHash } from "./script";
-import { isScriptCapability, scriptAnswerFrom, scriptRequest } from "./script-classification";
+import {
+    SCRIPT_ACTION_TABLE,
+    isScriptCapability,
+    scriptAnswerFrom,
+    scriptRequest,
+} from "./script-classification";
+import { trustedSkillForScript } from "./trusted-scripts";
 import { DEFAULT_DECISION_STRATEGY, resolveStrategy, type DecisionStrategyId } from "./strategies";
 import type {
     DecisionContext,
@@ -265,6 +271,10 @@ export class DecisionEvaluator {
 
     /** Classify one body as code: the body alone, keyed on its content. */
     private classifyScript(artifact: ScriptArtifact, model: Classifier): Promise<FormOutcome> {
+        if (trustedSkillForScript(artifact.path) !== undefined) {
+            return Promise.resolve(trustedScriptOutcome(artifact.source));
+        }
+
         return this.classifyForm(model, {
             subject: "script",
             source: artifact.source,
@@ -610,6 +620,30 @@ function strategyFor(
     }
 
     return strategyId ?? DEFAULT_DECISION_STRATEGY;
+}
+
+/**
+ * The synthetic answer for a trusted skill script: `read_only`, with no request made.
+ *
+ * `read_only` is the only capability that adds no constraint anywhere; the point of the list is that the code
+ * is trusted, not that it was judged harmless. The outcome is `cached` so the decision log says no request was
+ * made, and its confidence is irrelevant to policy because a capability can only withhold, never grant.
+ */
+function trustedScriptOutcome(source: string): FormOutcome {
+    return {
+        subject: "script",
+        source,
+        answer: {
+            action: SCRIPT_ACTION_TABLE.read_only,
+            reason: "read_only",
+            confidence: 1,
+        },
+        answers: {},
+        status: "trusted",
+        reason: undefined,
+        cached: true,
+        usage: zeroUsage(),
+    };
 }
 
 /** The deterministic form for a file access the runner's rung does not cover. */

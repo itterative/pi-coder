@@ -87,7 +87,15 @@ export type DecisionVerdictStrategy = DecisionStrategyId | "file-access";
 
 /** How one form's classifier request ended, for the decision log. */
 export type DecisionFormStatus =
-    "answered" | "cached" | "budget" | "rejected" | "cooldown" | "error" | "timeout";
+    | "answered"
+    | "cached"
+    | "budget"
+    | "rejected"
+    | "cooldown"
+    | "error"
+    | "timeout"
+    /** A trusted skill script, folded without a request. */
+    | "trusted";
 
 /** The question sets the module ships. `single` is one 3-way choice: host, sandbox, or refuse. */
 export type DecisionQuestionSet = "single";
