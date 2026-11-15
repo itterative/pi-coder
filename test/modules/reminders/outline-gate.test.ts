@@ -111,6 +111,7 @@ describe("outline gate", () => {
                         "src/args.ts:45:export interface ContainerMount {\nsrc/args.ts-46-    source: string;\n",
                     ),
                 ],
+                outcome: "completed",
             },
             context(),
         );
@@ -148,6 +149,7 @@ describe("outline gate", () => {
             {
                 message: assistantStep(COMMANDS),
                 toolResults: [toolResult("c0", "ok"), toolResult("c1", "ok")],
+                outcome: "completed",
             },
             context(),
         );
@@ -171,6 +173,7 @@ describe("outline gate", () => {
             {
                 message: assistantStep(COMMANDS),
                 toolResults: [toolResult("c0", "ok"), toolResult("c1", "ok")],
+                outcome: "completed",
             },
             context(),
         );
@@ -186,6 +189,7 @@ describe("outline gate", () => {
             {
                 message: assistantStep(['npx vitest run test/x.ts 2>&1 | rg -n "×|Tests"']),
                 toolResults: [toolResult("c0", "× one test failed")],
+                outcome: "completed",
             },
             context(),
         );

@@ -166,6 +166,7 @@ async function step(
         {
             message: { role: "assistant", content: options.toolCalls ?? [] },
             toolResults: options.toolResults === false ? [] : [{ role: "toolResult" }],
+            outcome: "completed",
         },
         ctx,
     );
@@ -639,7 +640,11 @@ describe("reminder emission", () => {
 
         // The step boundary decides once, and the growth the stream accumulated is what it measures.
         await stub.requireHandler("turn_end")(
-            { message: { role: "assistant", content: [] }, toolResults: [{ role: "toolResult" }] },
+            {
+                message: { role: "assistant", content: [] },
+                toolResults: [{ role: "toolResult" }],
+                outcome: "completed",
+            },
             ctx,
         );
 

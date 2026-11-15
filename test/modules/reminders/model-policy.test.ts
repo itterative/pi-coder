@@ -116,7 +116,7 @@ async function toolResponse(stub: PiStub, toolResults: unknown[] = [{}]): Promis
 
 /** The `turn_end` handler alone: what pi calls, which returns before any checkpoint consult has started. */
 async function toolResponseNow(stub: PiStub, toolResults: unknown[] = [{}]): Promise<void> {
-    await stub.requireHandler("turn_end")({ message: {}, toolResults }, ctx);
+    await stub.requireHandler("turn_end")({ message: {}, toolResults, outcome: "completed" }, ctx);
 }
 
 /**
@@ -832,13 +832,59 @@ describe("deferred rotation turns", () => {
 
         // The regression this pins: a text-only answer may be the run's last, yet a steer queued before it
         // still woke another turn just to deliver the reminder after the final answer.
-        await stub.requireHandler("turn_end")({ message: {}, toolResults: [] }, ctx);
+        await stub.requireHandler("turn_end")(
+            { message: {}, toolResults: [], outcome: "completed" },
+            ctx,
+        );
         expect(stub.sentMessages).toEqual([]);
 
         await stub.requireHandler("agent_settled")({}, ctx);
 
         expect(stub.sentMessages).toHaveLength(1);
         expect(stub.sentMessages[0]?.options).toEqual({ deliverAs: "nextTurn" });
+    });
+
+    it("does not steer the held reminder into a step that ended aborted or in error", async () => {
+        const stub = harness();
+        await startSession(stub);
+        await stub.requireHandler("agent_start")({}, ctx);
+        await userTurn(stub);
+        await userTurn(stub);
+
+        // An aborted or failed response ends the run rather than continuing it, so a steer queued here would be
+        // a message the model never reads. The held reminder keeps waiting for a step that can still deliver it.
+        await stub.requireHandler("turn_end")(
+            { message: {}, toolResults: [{}], outcome: "aborted" },
+            ctx,
+        );
+        await stub.requireHandler("turn_end")(
+            { message: {}, toolResults: [{}], outcome: "error" },
+            ctx,
+        );
+        expect(stub.sentMessages).toEqual([]);
+
+        await toolResponse(stub);
+
+        expect(stub.sentMessages).toHaveLength(1);
+        expect(String(stub.sentMessages[0]?.message.content)).toContain("scout");
+        expect(stub.sentMessages[0]?.options).toEqual({ deliverAs: "steer" });
+    });
+
+    it("does not steer the held reminder while the run is being cancelled", async () => {
+        // A cancel during tool execution reports `completed`, because that response had already finished; the
+        // run's abort signal is the only sign that the step has no next inference to steer into.
+        const controller = new AbortController();
+        ctx = { ...ctx, signal: controller.signal };
+        const stub = harness();
+        await startSession(stub);
+        await stub.requireHandler("agent_start")({}, ctx);
+        await userTurn(stub);
+        await userTurn(stub);
+
+        controller.abort();
+        await toolResponse(stub);
+
+        expect(stub.sentMessages).toEqual([]);
     });
 
     it("does not show a mid-run reminder in a turn that already showed a rotation one", async () => {

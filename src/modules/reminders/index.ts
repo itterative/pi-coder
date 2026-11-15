@@ -511,6 +511,17 @@ export default function registerRemindersExtension(
      */
     let rotationReminderTurn: number | undefined;
 
+    /**
+     * Whether the run this boundary belongs to is being cancelled by the user.
+     *
+     * `turn_end`'s `outcome` is the response's own stop reason, so a cancel during tool execution still reports
+     * `completed` - that response had already finished. The run's abort signal is what catches that case, and it
+     * also covers a cancel that lands while this boundary is awaiting the audit or a gate. A cancelled run asks
+     * no further question, so nothing should be steered into it: pi is settling it, and the queue would never be
+     * drained. Held reminders stay in `pendingSteers` for a step that can still deliver them.
+     */
+    const cancelledRun = (ctx: ExtensionContext): boolean => ctx.signal?.aborted === true;
+
     /** Deliver the reminders held for a continuing run at the step boundary that proved it continues. */
     const flushPendingSteers = (): void => {
         sendHeld(pendingSteers.splice(0), "steer");
@@ -1157,6 +1168,12 @@ export default function registerRemindersExtension(
             return;
         }
 
+        // A cancelled run asks no further question: the consult would spend a classifier call on a run pi is
+        // settling, and the steer would join a queue nothing drains.
+        if (cancelledRun(ctx)) {
+            return;
+        }
+
         // The turn's rotation reminder already holds the slot, delivered or still held for this run.
         if (rotationReminderTurn === scheduler.snapshot().userTurns) {
             return;
@@ -1207,8 +1224,9 @@ export default function registerRemindersExtension(
             (reminder) => available?.has(reminder.id) === true,
         );
         const judged = options.length === 0 ? undefined : await consultMidRun(ctx, options);
-        // A consult outlives the update that started it; an answer from a session this one replaced is dropped.
-        if (at !== epoch) {
+        // A consult outlives the update that started it; an answer from a session this one replaced - or for a
+        // run the user cancelled while it was in the air - is dropped.
+        if (at !== epoch || cancelledRun(ctx)) {
             return;
         }
 
@@ -1429,6 +1447,14 @@ export default function registerRemindersExtension(
      * step with nothing due pays nothing.
      */
     pi.on("turn_end", async (event, ctx) => {
+        // A turn that ended aborted or in error is the end of the run, not a step: pi is settling it, so a
+        // message queued here is one the model never reads. The held reminders are left in `pendingSteers`
+        // rather than steered into a dead run; the next step that can deliver them, or `agent_settled`'s hand-off
+        // to the next prompt, still carries them.
+        if (event.outcome !== "completed" || cancelledRun(ctx)) {
+            return;
+        }
+
         if (event.toolResults.length === 0) {
             // A step that ran no tool has no next inference to steer into: the run may be over, so a reminder
             // queued here would arrive as a stray message after the final answer.
@@ -1493,8 +1519,11 @@ export default function registerRemindersExtension(
         }
 
         // A step that ran a tool is the first point the run guarantees another inference, so the reminders held
-        // for it have a destination now.
-        flushPendingSteers();
+        // for it have a destination now - unless the cancel landed while the audit or a gate above was awaited,
+        // in which case they keep waiting for a step that can still deliver them.
+        if (!cancelledRun(ctx)) {
+            flushPendingSteers();
+        }
 
         const at = epoch;
         // Queued first, because the mid-run gate reads the labels this checkpoint produces and waits for it.

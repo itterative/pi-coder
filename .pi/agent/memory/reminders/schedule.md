@@ -85,7 +85,8 @@ Both append at the end of the conversation, so the system-prompt prefix stays st
   gate failing skips the consult and calls no `decide` (`judged.skipped`, recorded on the debug entry), because
   the model being in charge makes an absent answer non-authoritative for the fallback. A rotation pick is
   deferred, and when the run is in flight the payload is **held in `pendingSteers`** rather than steered at
-  once: it is flushed on the first `turn_end` with a tool result, or sent as `nextTurn` from `agent_settled` if
+  once: it is flushed on the first `turn_end` with a tool result that ended `completed` on a run that is still
+  live (below), or sent as `nextTurn` from `agent_settled` if
   the run's answer was terminal. Steering earlier let pi poll the queue after a text-only turn and start a new
   inference just to deliver the reminder after the final answer. `rotationReminderTurn` records the turn whose
   rotation slot is taken, so the mid-run gate cannot show a second reminder in that same turn.
@@ -101,7 +102,13 @@ Both append at the end of the conversation, so the system-prompt prefix stays st
   decision point is the **step boundary** - pi awaits that dispatch, the step's tools have run, and a steer
   lands after the turn and before the next inference, the only point where delivering one means anything.
   `message_update` contributes only the growth estimate; streaming never consults. A step with no tool result
-  may be the run's last, so it steers nothing. The gate is computed once per step, and only the threshold
+  may be the run's last, so it steers nothing.
+  **A step that ended `aborted` or `error` steers nothing either**, and neither does one whose run signal is
+  already aborted: pi is settling the run, so a message queued there is never read. `turn_end.outcome` is the
+  response's own stop reason, which still says `completed` when the user cancelled during tool execution (that
+  response had already finished) - `ctx.signal.aborted` is the only tell for that case. Held reminders are not
+  discarded on a cancelled turn: they stay in `pendingSteers` for the next step that can deliver them, and
+  `agent_settled` still hands them to the next prompt. The gate is computed once per step, and only the threshold
   applies here. The decision is consulted first, when the decision model has opted into reminders: the tier-2
   question on the judged state, with no `request` of its own (inside a run the branch's last user message is
   the turn's request), no tier-1 re-judge (the checkpoints keep the labels current) and no TODO query (it reads
