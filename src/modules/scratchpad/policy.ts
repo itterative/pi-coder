@@ -46,8 +46,8 @@ export interface ScratchpadPolicy {
 
 export const DEFAULT_SCRATCHPAD_POLICY: ScratchpadPolicy = {
     retentionMs: 7 * DAY_MS,
-    totalBudgetBytes: 1024 * MEGABYTE,
-    perScratchpadBytes: 256 * MEGABYTE,
+    totalBudgetBytes: 10240 * MEGABYTE,
+    perScratchpadBytes: 1024 * MEGABYTE,
     minimumEvictionAgeMs: DAY_MS,
     maxEntries: 50_000,
     measureIntervalMs: 30_000,
