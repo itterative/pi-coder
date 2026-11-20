@@ -8,14 +8,21 @@ import {
     capOutput,
     collectCompactions,
     contextBranch,
+    discoverSessionFiles,
     matchEntryRef,
     parseArgs,
     parseSessionFile,
     parseWhen,
+    readSessionHead,
     renderCompactionList,
+    renderOverview,
+    renderSearch,
+    renderSessionList,
     renderTranscript,
     renderTurnList,
     resolveSessionFile,
+    searchBranch,
+    selectCompactionFolds,
     selectWindow,
     toolArgument,
 } from "../../../skills/session-review/scripts/session-transcript.mts";
@@ -178,7 +185,10 @@ function buildFixtureLines(): EntryLine[] {
             },
         },
         user("u3", "f01d0001", "2026-01-01T10:10:00.000Z", "third request"),
-        assistant("a3", "u3", "2026-01-01T10:10:10.000Z", [{ type: "text", text: "third answer" }]),
+        assistant("a3", "u3", "2026-01-01T10:10:10.000Z", [
+            { type: "text", text: "third answer" },
+            toolCall("call_3", "write", { path: `${CWD}/notes.md`, content: "notes" }),
+        ]),
         {
             type: "compaction",
             id: "f01d0002",
@@ -222,6 +232,10 @@ function transcriptOptions(overrides: Partial<TranscriptOptions> = {}): Transcri
         thinking: false,
         maxChars: 0,
         mode: "transcript",
+        searchScope: "all",
+        regex: false,
+        caseSensitive: false,
+        all: false,
         help: false,
         ...overrides,
     };
@@ -569,7 +583,31 @@ describe("renderTurnList", () => {
         expect(output).toContain("# 14 entries · 4 turns · 2 compaction(s)");
         expect(output).toContain("first request with a long line and a second line");
         expect(output).toContain("u1");
+        expect(output).toContain("f01d0001");
+        expect(output).toContain("fold");
         expect(output).toContain("fourth request");
+    });
+
+    it("keeps full prompts with --width 0", () => {
+        const long =
+            "a prompt that is long enough to pass the default list width by a comfortable margin";
+        const branch: SessionEntry[] = [
+            {
+                type: "message",
+                id: "u1",
+                parentId: null,
+                timestamp: "2026-01-01T10:00:00.000Z",
+                message: { role: "user", content: long },
+            },
+        ];
+        const output = renderTurnList({
+            session: fixture.session,
+            filePath: FILE,
+            branch,
+            options: transcriptOptions({ width: 0 }),
+        });
+
+        expect(output).toContain(long);
     });
 });
 
@@ -601,6 +639,254 @@ describe("renderCompactionList", () => {
 
         expect(output).toContain("second fold summary");
         expect(output).not.toContain("first fold summary");
+    });
+
+    it("limits folds, selects one by rank or entry id, and reports a miss", () => {
+        const limited = selectCompactionFolds(fixture.branch, transcriptOptions({ limit: 1 }));
+        expect(limited.total).toBe(2);
+        expect(limited.folds.map((fold) => fold.rank)).toEqual([1]);
+        expect(limited.limited).toBe(true);
+
+        const byRank = selectCompactionFolds(
+            fixture.branch,
+            transcriptOptions({ compaction: "2" }),
+        );
+        expect(byRank.folds[0]?.info.entry.id).toBe("f01d0001");
+        expect(byRank.folds[0]?.rank).toBe(2);
+
+        const byId = selectCompactionFolds(
+            fixture.branch,
+            transcriptOptions({ compaction: "f01d0002" }),
+        );
+        expect(byId.folds[0]?.info.entry.id).toBe("f01d0002");
+        expect(
+            selectCompactionFolds(fixture.branch, transcriptOptions({ compaction: "99" })).error,
+        ).toMatch(/out of range/);
+
+        const output = renderCompactionList({
+            session: fixture.session,
+            filePath: FILE,
+            branch: fixture.branch,
+            options: transcriptOptions({ limit: 1 }),
+        });
+        expect(output).toContain("showing newest 1 of 2");
+        expect(output).not.toContain("first fold summary");
+    });
+});
+
+describe("renderOverview", () => {
+    it("digests each turn with its prompt, conclusion, tools, files, errors, and span", () => {
+        const output = renderOverview({
+            session: fixture.session,
+            filePath: FILE,
+            branch: fixture.branch,
+            options: transcriptOptions(),
+        });
+
+        expect(output).toContain("[1] 10:00:00→10:00:06 · entries 3–5 · 1 tools");
+        expect(output).toContain("user: first request with a long line and a second line");
+        expect(output).toContain("assistant: working on it");
+        expect(output).toContain("tools: read");
+        expect(output).toContain("files: modified notes.md");
+        expect(output).toContain("error: FAIL src/x.test.ts expected 1 to be 2");
+        expect(output).toContain("span: --from u2 --to f01d0001");
+        expect(output).toContain("fold f01d0001");
+        expect(output).toContain("span --from m1 --to r1");
+    });
+
+    it("honors --tools none and --width", () => {
+        const bare = renderOverview({
+            session: fixture.session,
+            filePath: FILE,
+            branch: fixture.branch,
+            options: transcriptOptions({ tools: "none" }),
+        });
+        expect(bare).not.toContain("tools: read");
+        expect(bare).not.toContain("files: modified");
+
+        const narrow = renderOverview({
+            session: fixture.session,
+            filePath: FILE,
+            branch: fixture.branch,
+            options: transcriptOptions({ width: 20 }),
+        });
+        expect(narrow).toContain("user: first request with …");
+    });
+
+    it("narrows to a window while keeping the real turn numbers", () => {
+        const output = renderOverview({
+            session: fixture.session,
+            filePath: FILE,
+            branch: fixture.branch,
+            options: transcriptOptions({ last: 2 }),
+        });
+
+        expect(output).toContain("# window last 2 turns");
+        expect(output).toContain("[3]");
+        expect(output).toContain("[4]");
+        expect(output).not.toContain("[1]");
+        expect(output).not.toContain("first request with a long line");
+    });
+});
+
+describe("searchBranch", () => {
+    it("finds text, tool calls, and summaries with their turn and entry id", () => {
+        const summary = searchBranch(
+            fixture.branch,
+            transcriptOptions({ search: "second fold summary" }),
+        );
+        expect(summary.total).toBe(1);
+        expect(summary.hits[0]).toMatchObject({
+            turn: 3,
+            where: "compaction",
+            entry: { id: "f01d0002" },
+        });
+
+        const tool = searchBranch(
+            fixture.branch,
+            transcriptOptions({ search: "npm run test:run", searchScope: "tools" }),
+        );
+        expect(tool.total).toBe(1);
+        expect(tool.hits[0]?.where).toBe("tool bash");
+
+        const textOnly = searchBranch(
+            fixture.branch,
+            transcriptOptions({ search: "npm run test:run", searchScope: "text" }),
+        );
+        expect(textOnly.total).toBe(0);
+    });
+
+    it("supports regex, case sensitivity, limits, and window narrowing", () => {
+        expect(
+            searchBranch(
+                fixture.branch,
+                transcriptOptions({ search: "second\\s+fold", regex: true }),
+            ).total,
+        ).toBe(1);
+        expect(
+            searchBranch(
+                fixture.branch,
+                transcriptOptions({ search: "FOURTH", caseSensitive: true, searchScope: "text" }),
+            ).total,
+        ).toBe(0);
+        expect(
+            searchBranch(
+                fixture.branch,
+                transcriptOptions({ search: "FOURTH", searchScope: "text" }),
+            ).total,
+        ).toBe(2);
+
+        const limited = searchBranch(
+            fixture.branch,
+            transcriptOptions({ search: "request", searchScope: "text", limit: 1 }),
+        );
+        expect(limited.total).toBe(4);
+        expect(limited.hits).toHaveLength(1);
+
+        const windowed = searchBranch(
+            fixture.branch,
+            transcriptOptions({
+                search: "request",
+                searchScope: "text",
+                turns: { first: 3, last: 3 },
+            }),
+        );
+        expect(windowed.total).toBe(1);
+        expect(windowed.windowLabel).toBe("turn 3");
+
+        expect(
+            searchBranch(fixture.branch, transcriptOptions({ search: "([", regex: true })).error,
+        ).toMatch(/invalid --regex/);
+    });
+
+    it("renders a compact hit table", () => {
+        const options = transcriptOptions({ search: "notes.md", searchScope: "tools" });
+        const outcome = searchBranch(fixture.branch, options);
+        const output = renderSearch(
+            { session: fixture.session, filePath: FILE, branch: fixture.branch, options },
+            outcome,
+        );
+
+        expect(output).toContain('# search "notes.md" · 1 matching entries of 14');
+        expect(output).toContain("tool write");
+        expect(output).toContain("a3");
+        expect(output).toContain("notes.md");
+    });
+});
+
+describe("discoverSessionFiles", () => {
+    const temporaryDirectories: string[] = [];
+
+    function temporaryDirectory(): string {
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-session-discover-"));
+        temporaryDirectories.push(directory);
+        return directory;
+    }
+
+    afterEach(() => {
+        for (const directory of temporaryDirectories.splice(0)) {
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+
+    function writeSession(file: string, id: string, cwd: string, prompt: string): void {
+        const lines: EntryLine[] = [
+            { ...header(), id, cwd },
+            user("u1", null, "2026-01-01T10:00:00.000Z", prompt),
+            assistant("a1", "u1", "2026-01-01T10:00:05.000Z", [{ type: "text", text: "ok" }]),
+        ];
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, sessionContent(lines));
+    }
+
+    it("reads the header and first real user prompt from the head of a file", () => {
+        const root = temporaryDirectory();
+        const file = path.join(root, "s.jsonl");
+        const bigSystem = "x".repeat(70 * 1024);
+        fs.writeFileSync(
+            file,
+            `${JSON.stringify(header())}\n${JSON.stringify({ type: "message", id: "s1", message: { role: "system", content: bigSystem } })}\n${JSON.stringify(user("u1", null, "2026-01-01T10:00:00.000Z", "real prompt"))}\n`,
+        );
+
+        expect(readSessionHead(file)).toEqual({
+            header: expect.objectContaining({ id: "fixture-session" }),
+            goal: "real prompt",
+        });
+    });
+
+    it("finds parent and child transcripts for the cwd, and by child run id", () => {
+        const root = temporaryDirectory();
+        const state = temporaryDirectory();
+        const env = { PI_CODING_AGENT_SESSION_DIR: root, PI_CODER_STATE_DIR: state };
+        const parentFile = path.join(
+            root,
+            "--tmp-proj--",
+            "2026-01-01T00-00-00-000Z_parentid.jsonl",
+        );
+        const childFile = path.join(
+            state,
+            "agent-sessions",
+            "--tmp-proj--",
+            "run-abc",
+            "2026-01-02T00-00-00-000Z_childid.jsonl",
+        );
+        writeSession(parentFile, "parentid", "/tmp/proj", "parent first prompt");
+        writeSession(childFile, "childid", "/tmp/worktree", "child first prompt");
+
+        const infos = discoverSessionFiles(env, "/tmp/proj", false);
+        expect(infos.map((info) => info.kind).toSorted()).toEqual(["child", "parent"]);
+        expect(infos.find((info) => info.kind === "child")?.runId).toBe("run-abc");
+
+        const output = renderSessionList(transcriptOptions({ last: 5 }), env, "/tmp/proj");
+        expect(output).toContain("## parent · /tmp/proj");
+        expect(output).toContain("## child · /tmp/worktree");
+        expect(output).toContain("parent first prompt");
+        expect(output).toContain("child first prompt");
+        expect(output).toContain("run-abc");
+        expect(output).toContain("childid");
+
+        expect(resolveSessionFile("run-abc", env, "/tmp/proj")).toBe(childFile);
+        expect(resolveSessionFile("childid", env, "/tmp/proj")).toBe(childFile);
     });
 });
 
@@ -687,6 +973,44 @@ describe("parseArgs", () => {
 
     it("recognizes --help", () => {
         expect(parseArgs(["--help"]).options.help).toBe(true);
+    });
+
+    it("parses discovery, search, and selection flags", () => {
+        const sessions = parseArgs(["--sessions", "--all", "--last", "2"]).options;
+        expect(sessions.mode).toBe("sessions");
+        expect(sessions.all).toBe(true);
+        expect(sessions.last).toBe(2);
+
+        const search = parseArgs([
+            "--search",
+            "needle",
+            "--in",
+            "tools",
+            "--regex",
+            "--case-sensitive",
+            "--limit",
+            "5",
+            "--width",
+            "0",
+        ]).options;
+        expect(search.mode).toBe("search");
+        expect(search.search).toBe("needle");
+        expect(search.searchScope).toBe("tools");
+        expect(search.regex).toBe(true);
+        expect(search.caseSensitive).toBe(true);
+        expect(search.limit).toBe(5);
+        expect(search.width).toBe(0);
+
+        const compaction = parseArgs(["--compaction", "2"]).options;
+        expect(compaction.mode).toBe("compactions");
+        expect(compaction.compaction).toBe("2");
+    });
+
+    it("reports invalid discovery and search values", () => {
+        expect(parseArgs(["--in", "loud"]).error).toMatch(/text, tools, or all/);
+        expect(parseArgs(["--width", "-1"]).error).toMatch(/non-negative integer/);
+        expect(parseArgs(["--limit", "0"]).error).toMatch(/positive integer/);
+        expect(parseArgs(["--search", ""]).error).toMatch(/non-empty pattern/);
     });
 });
 
