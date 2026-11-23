@@ -24,9 +24,16 @@ import { createPiStub, stubCommandContext, stubUi } from "../../../helpers/pi-st
 
 const tempDirs: string[] = [];
 
+/** A global config path that does not exist, so the developer's own `~/.pi` file cannot answer for a test. */
+const absentGlobalConfig = path.join(os.tmpdir(), `pi-sandbox-command-global-${process.pid}.json`);
+
 beforeEach(() => {
     // Let the project config decide the backend instead of the suite-wide bwrap pin.
     vi.stubEnv("PI_SANDBOX_BACKEND", "");
+    // The global config is merged into every answer: it supplies the backend, the mounts, the ports, and the
+    // device plan. Without this pin, `/sandbox` reports this machine's setup and a missing global mount turns the
+    // last notification into a warning. A test that needs a global config stubs its own path.
+    vi.stubEnv("SANDBOX_CONFIG_PATH_GLOBAL", absentGlobalConfig);
 });
 
 afterEach(() => {
