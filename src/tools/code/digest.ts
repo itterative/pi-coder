@@ -114,11 +114,15 @@ export async function runDigest(
     const languages = languagesOf(parsed);
     const kind =
         params.kind !== undefined && isDeclarationKind(params.kind) ? params.kind : undefined;
+    // A single-file digest is the caller asking what is in this file, so a large file still renders its tree and
+    // pages; only a directory digest folds a large file to its roots, where the row is an index entry and the other
+    // files' rows share the page.
+    const collapseHuge = !discovery.rootIsFile;
     const rendered = await timing.measure("search", async () => {
         const files: RenderedFile[] = [];
 
         for (const file of parsed) {
-            files.push(await renderFile(source, file, detail, kind, signal));
+            files.push(await renderFile(source, file, detail, kind, collapseHuge, signal));
         }
 
         return files;
@@ -227,6 +231,7 @@ async function renderFile(
     file: ParsedFile,
     detail: CodeDetail,
     kind: DeclarationKind | undefined,
+    collapseHuge: boolean,
     signal?: AbortSignal,
 ): Promise<RenderedFile> {
     // The line count, not a size band: `[tiny]` told a reader nothing they could act on, while `[812 lines]` says both
@@ -239,7 +244,7 @@ async function renderFile(
     }
 
     const lines: string[] = [];
-    const huge = sizeLabel(file.lineCount) === "huge" && detail !== "full";
+    const huge = collapseHuge && sizeLabel(file.lineCount) === "huge" && detail !== "full";
     const tally: RenderTally = { accessHidden: 0, signatureHidden: new Map() };
     const roots: Declaration[] = [];
 
@@ -296,7 +301,17 @@ async function renderFile(
     }
 
     if (huge) {
-        lines.push("  # huge file: member detail omitted; use outline show for a symbol");
+        // A root row alone is a dead end when the file is one container, which is the normal shape of a C++/HIP
+        // implementation file and of a TypeScript class module. Name what the row folded and the call that maps it.
+        const omitted = total - roots.length;
+
+        if (omitted > 0) {
+            const noun = omitted === 1 ? "nested declaration" : "nested declarations";
+
+            lines.push(
+                `  # ${omitted} ${noun} not shown · outline(action="digest", path="${source.displayPath(file.path)}") maps them`,
+            );
+        }
     }
 
     return {

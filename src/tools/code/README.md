@@ -429,9 +429,12 @@ costs what `usages` costs, and imports are cached per `ParsedFile` so an edited 
   top-level call sites · outline(action="flow", path="…") lists them`, or a re-export/comment-only line when it
   holds no calls. The count costs one usage-index pass, and only on the empty path — `src/index.ts` reporting
   "nothing" was the answer that taught an agent the tool does not apply to entrypoints.
-- `digest` degrades to a directory map when the result exceeds the character limit, and files over 1,500 lines
-  render only top-level declarations. A file header states its line count (`src/net/socket.h [26 lines]`), so a
-  reader can tell how much of the file the rows cover. `detail="full"` includes private/protected members, fields, enum members, and
+- `digest` degrades to a directory map when the result exceeds the character limit. A **single-file** digest maps
+  the whole tree and pages it, however large the file is. In a **directory** digest, files over 1,500 lines render
+  only top-level declarations, so one huge file cannot crowd out the other files' rows; the folded row names the
+  count of nested declarations and the single-file call that maps them, because a file wrapped in one namespace or
+  class otherwise maps to a row with no members. A file header states its line count
+  (`src/net/socket.h [26 lines]`), so a reader can tell how much of the file the rows cover. `detail="full"` includes private/protected members, fields, enum members, and
   nested variables; a **root** variable is a module constant and is part of the signature list too. Declaration rows
   show `:start-end` when the declaration spans lines, and `:line` for a one-liner; `search` locations and `show`
   headers use the same range convention.

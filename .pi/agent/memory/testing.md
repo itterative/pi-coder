@@ -19,7 +19,7 @@ The tests cover the consolidated TUI, memory, config, and sandbox modules. Comma
 
 ## Checklist before adding or changing a test
 
-The five rules most often gotten wrong; the rest are in the detail docs below.
+The rules most often gotten wrong; the rest are in the detail docs below.
 
 - **Reuse a shared double before writing one** — see `test-doubles.md` for which helper; never a hand-built
   `as any` literal.

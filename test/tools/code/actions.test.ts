@@ -128,22 +128,35 @@ describe("outline digest", () => {
         expect(result.truncated).toBe(true);
     });
 
-    it("collapses a huge file to its top-level declarations", async () => {
+    it("maps a huge file whole, and folds it to a root row in a directory digest", async () => {
         const methods = Array.from(
             { length: 1_600 },
             (_, index) => `  void method_${index}();`,
         ).join("\n");
         const huge = new MemoryCodeSource("/project", {
             "src/huge.h": `class Huge {\npublic:\n${methods}\n};\n`,
+            "src/small.h": `class Small {\npublic:\n  void go();\n};\n`,
         });
-        const result = await runDigest(huge, {
+
+        const single = await runDigest(huge, {
             action: "digest",
             path: "src/huge.h",
         });
 
-        expect(result.text).toContain("class Huge");
-        expect(result.text).toContain("huge file: member detail omitted");
-        expect(result.text).not.toContain("method_1599");
+        expect(single.text).toContain("class Huge");
+        expect(single.text).toContain("method_0");
+        expect(single.text).toContain("# next:");
+
+        const directory = await runDigest(huge, {
+            action: "digest",
+            path: "src",
+        });
+
+        expect(directory.text).toContain("class Huge");
+        expect(directory.text).toContain("1600 nested declarations not shown");
+        expect(directory.text).toContain('outline(action="digest", path="src/huge.h")');
+        expect(directory.text).not.toContain("method_0");
+        expect(directory.text).toContain("void go()");
     });
 
     it("includes private and field detail when asked", async () => {
