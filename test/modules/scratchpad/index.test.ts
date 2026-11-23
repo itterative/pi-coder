@@ -90,7 +90,13 @@ describe("temporary scratchpad extension", () => {
         const { pi, handler } = harness();
         const sessionManager = stubSessionManager();
         const runtimeContext = context(sessionManager);
-        registerScratchpadExtension(pi, { root, policy: testPolicy() });
+        // The prompt renders the policy it was given, so this test gives it its own numbers: pinning the shipped
+        // defaults here made a policy change look like a prompt regression.
+        const policy = testPolicy({
+            perScratchpadBytes: 512 * 1024 * 1024,
+            retentionMs: 2 * 24 * 60 * 60 * 1000,
+        });
+        registerScratchpadExtension(pi, { root, policy });
 
         await handler("session_start")({ reason: "startup" }, runtimeContext);
 
@@ -105,8 +111,8 @@ describe("temporary scratchpad extension", () => {
         const prompt = event.systemPromptOptions.sections.scratchpad_system ?? "";
         expect(prompt).toContain("Temporary Scratchpad");
         expect(prompt).toContain(scratchpadPath!);
-        expect(prompt).toContain("idle for 7 days");
-        expect(prompt).toContain("256 MB");
+        expect(prompt).toContain("idle for 2 days");
+        expect(prompt).toContain("512 MB");
     });
 
     it("reuses a marked directory when the runtime registry is recreated", async () => {

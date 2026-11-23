@@ -28,6 +28,10 @@ The five rules most often gotten wrong; the rest are in the detail docs below.
   direct state or interaction assertions.
 - **Never write the developer's home or pi-coder state root (`<agent-dir>/pi-coder`) from a suite** — use explicit
   temporary state/workspaces dirs.
+- **Pin the value the test depends on, never the shipped default.** A prompt test that asserts `256 MB` or
+  `7 days` is really asserting `DEFAULT_SCRATCHPAD_POLICY`, so tuning that policy reddens a test of the prompt
+  (`test/modules/scratchpad/index.test.ts`). Pass the suite's own policy/config/limit and assert that value;
+  the shipped default needs no test of its own.
 - **Never read the developer's setup either.** Three ambient inputs have made the suite pass only on one machine:
   the global sandbox config (`config.load` merges `~/.pi/bash-sandbox-config.json` and falls back to
   `defaultConfig()`, whose `inheritEnv: {}` is what emits `--clearenv`), the process environment
