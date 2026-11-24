@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import registerConfigCommand from "./commands/config";
+import registerContinueCommand from "./commands/continue";
 import registerStatsCommand from "./commands/stats";
 import { registerCompactionExtension } from "./modules/compaction";
 import registerContainerSandbox from "./modules/sandbox/container";
@@ -33,6 +34,7 @@ export default function (pi: ExtensionAPI) {
     registerTodoListExtension(pi);
     registerCompactionExtension(pi);
     registerConfigCommand(pi);
+    registerContinueCommand(pi);
     registerStatsCommand(pi);
     registerAgentTool(pi);
     registerAskUserTool(pi);

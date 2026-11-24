@@ -66,6 +66,7 @@ export function assistantEntry(
     content: AssistantContent,
     timestamp: number,
     usage = zeroUsage(),
+    overrides: Partial<Pick<AssistantMessage, "stopReason" | "errorMessage">> = {},
 ): AppendedMessage {
     return {
         role: "assistant",
@@ -75,6 +76,7 @@ export function assistantEntry(
         model: "test",
         usage,
         stopReason: "stop",
+        ...overrides,
         timestamp,
     };
 }
