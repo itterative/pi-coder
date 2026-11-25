@@ -759,11 +759,10 @@ describe("compaction stages", () => {
         expect(twoStage?.details.route).toBe("two-stage");
     });
 
-    it("refuses the kept reply's count when stage 1 could not copy everything before it", async () => {
-        // The count at the cut point is only the span's size if our span *is* that reply's body. A row pi
-        // exposes but this module cannot append (branch_summary has no public append in pi 0.84) narrows the
-        // span, and a narrowed span is not the body that number measured - it is smaller, so believing the
-        // count would over-size the request for no reason the trace could explain afterwards.
+    it("trusts the kept reply's count now that seeding represents every row", async () => {
+        // The count at the cut point is only the span's size if our span *is* that reply's body. Seeding loads
+        // the branch summary (the append API could not), so no row narrows the span and the count governs: stage
+        // 1 is skipped rather than trusted against a body that was never the one measured.
         const ask = userMessage("fix the compaction module");
         const readCall = assistantMessage({ text: "on it", calls: [{ id: "c1", name: "read" }] });
         const keptReply = assistantMessage({ text: KEPT_TEXT, usage: countedUsage(199_000, 100) });
@@ -776,7 +775,7 @@ describe("compaction stages", () => {
                 parentId: "span-1",
                 timestamp: "1970-01-01T00:00:00.000Z",
                 fromId: "span-1",
-                summary: "a branch stage 1 has no way to represent",
+                summary: "a branch stage 1 can now represent",
             },
             messageEntry("kept-1", keptReply, "bs-1"),
             messageEntry("kept-2", assistantMessage({ text: "acknowledged" }), "kept-1"),
@@ -788,11 +787,9 @@ describe("compaction stages", () => {
         });
         const payload = await h.compact();
 
-        // Same 199k count the previous test had the gate obey, and here it is ignored: `skippedEnt=1` is what
-        // separates the two.
-        expect(h.calls).toHaveLength(2);
-        expect(h.calls[0].context.tools).toHaveLength(2);
-        expect(payload?.details.route).toBe("two-stage");
+        expect(h.calls).toHaveLength(1);
+        expect(payload?.details.route).toBe("serialized");
+        expect(payload?.details.countedBodyTokens).toBe(199_000);
     });
 
     it("sizes from the anchor when the kept entry cannot vouch for the span", async () => {

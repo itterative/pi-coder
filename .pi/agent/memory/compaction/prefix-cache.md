@@ -243,8 +243,8 @@ The fix is to resend what the parent's request actually carried: `rememberParent
 (`src/modules/compaction/index.ts`) keeps `providerSystemPrompt(payload)` from the `before_provider_request`
 payload, keyed by session manager and validated by leaf id. The hook is now registered unconditionally (it used to
 be gated on chain tracing), because this is cache behavior, not diagnostics. Stage 1 strips a leading system
-message from the span — pi 1.1 replays the prompt there and `appendSpanEntry` recomputes it when copying a
-compaction row — and falls back to that stripped text, then `ctx.getSystemPrompt()`. Nothing is persisted: the
+message from the span — pi 1.1 replays the prompt there, and seeding preserves the compaction row's
+`systemMessage` — and falls back to that stripped text, then `ctx.getSystemPrompt()`. Nothing is persisted: the
 prompt is one string per live session, and a reload costs a fallback, never a wrong compaction.
 
 **Confirmed live on the next manual run (2026-11-14 09:56):** both sides printed `sys=28920c` with the same

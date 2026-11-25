@@ -1,6 +1,6 @@
 ---
 name: upstream-gaps
-description: "pi and pi-ai limitations compaction has to work around: nested core package, missing copyable entry kinds, hooks complete() bypasses, no typed provider error, unreachable Retry-After, no client-side deadline, and the hidden constrainedSampling field."
+description: "pi and pi-ai limitations compaction has to work around: nested core package, hooks complete() bypasses, no typed provider error, unreachable Retry-After, no client-side deadline, and the hidden constrainedSampling field."
 category: architecture
 keep_updated: true
 ---
@@ -14,10 +14,11 @@ Detail companion to the `compaction` memory. Each row is a limitation upstream, 
 
 - `@earendil-works/pi-agent-core` is nested under `pi-coding-agent/node_modules`, so `src/` must not name it:
   `AgentMessage`/`CompactionPreparation` types are derived in `types.ts` from `SessionBeforeCompactEvent`.
-- pi's `appendMessage` doc comment references an `appendBranchSummary()` that **does not exist**, so `branch_summary`
-  (and `label`/`session_info`) entries cannot be copied into the span transcript. `buildSpanSession` reports them in
-  `skippedEntries` rather than faking them; stage 2's transcript still contains branch summaries because it is built
-  from `preparation.messagesToSummarize`. `skippedEntries > 0` therefore disqualifies the count tiers (`sizing.md`).
+- pi's `appendMessage` doc comment references an `appendBranchSummary()` that **does not exist**, so the append API
+  cannot rebuild `branch_summary` (or `label`/`session_info`) entries. Stage 1 no longer uses that path:
+  `buildSpanSession` seeds the span with `SessionManager.inMemory(cwd, undefined, entries)`, which loads every entry
+  type. `skippedEntries` is retained for the trace record but is always 0, so the `skippedEntries > 0` guard in the
+  count tiers (`sizing.md`) is now inert.
 - `ctx.getSystemPrompt()` includes pi-coder's injected `<memory_system>`/`<scratchpad_system>` blocks, because it
   reflects the `before_agent_start` augmentation — but it reads `agent.state.systemPrompt`, which only equals the
   request path's prompt *during* a run. That divergence is why a compaction outside a run sees the 12,817-char base

@@ -80,7 +80,7 @@ missing-checkpoint shape: its two fold rows both fall inside the window.
 hand-built branch in this suite has. `test/modules/compaction/session-fixture.test.ts` replays that tree through the
 span builder and pins what the live run recorded in the trace beside it (28 entries copied, 17 messages, nothing
 skipped — and the replay's `messageCount`/`copiedEntries` must equal the captured `attempt`'s), so the two fixtures
-vouch for each other and a change to slicing, copying, or message conversion trips the golden head hash
+vouch for each other and a change to slicing, seeding, or message conversion trips the golden head hash
 `2d54d1ca019d4841`. **Slice the branch with `getBranch()`, never `buildContextEntries()`**: the latter answers with pi's
 post-compaction view, which has already folded that history into a summary.
 

@@ -1,9 +1,4 @@
-import {
-    buildContextEntries,
-    buildSessionContext,
-    convertToLlm,
-    SessionManager,
-} from "@earendil-works/pi-coding-agent";
+import { buildSessionContext, convertToLlm, SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 
 import { messageLadder } from "../../../src/modules/compaction/chain";
@@ -97,11 +92,9 @@ function traceAttempt(strategy: string): CompactionAttemptFields {
  * The third fold of a real hosted session - the case that broke stage 1's prefix cache.
  *
  * Two folds sit inside this span window. pi 1.1 emits only the newest fold's summary - an earlier retained
- * compaction contributes no message - but it still deposits the newest at the front of the resolved list and the
- * older compaction further down. Copying that already-ordered list into a fresh session re-runs pi's hoist and
- * promotes the *older* summary, so the body stopped being a prefix of what the provider had cached at exactly
- * its second message - the `first=messages[2]` the recorded trace carries, reproduced here rather than inferred
- * from it.
+ * compaction contributes no message. Seeding the chronological window into pi's builder runs its hoist once and
+ * reproduces the live order; the window is what keeps the body a prefix, because reaching past the last fold
+ * would re-read text no provider ever cached.
  */
 const HOSTED = fixturePath("session", "hosted-three-folds.jsonl");
 /** Fold three's retained-tail boundary, fold two's own entry, and fold two's boundary. */
@@ -170,12 +163,7 @@ function foldThreeReplay() {
     const built = buildSpanSession(span.entries, manager.getCwd());
     const ours = convertToLlm(built.sessionManager.buildSessionContext().messages);
 
-    // The source this replaces: pi's already-hoisted resolved view, sliced at the cut and copied into a fresh
-    // session, which hoists a second time. Built here so the fix has a counterfactual to be measured against.
-    const resolvedSpan = spanContextEntries(buildContextEntries(atRequest, leafId), HOSTED_CUT);
     const unwindowed = spanContextEntries(atRequest, HOSTED_CUT);
-    const resolvedBuilt = buildSpanSession(resolvedSpan.entries, manager.getCwd());
-    const shuffled = convertToLlm(resolvedBuilt.sessionManager.buildSessionContext().messages);
 
     return {
         atRequest,
@@ -183,7 +171,6 @@ function foldThreeReplay() {
         cutIndex,
         live,
         ours,
-        shuffled,
         span,
         unwindowed,
         windowStart,
@@ -220,18 +207,13 @@ describe("hosted three-fold fixture", () => {
         expect(wireKey(ours)[0]).toBe(wireKey(live)[0]);
     });
 
-    it("is the difference between a prefix and a shuffle, measured against the old source", () => {
-        const { live, ours, shuffled, span, unwindowed } = foldThreeReplay();
+    it("sends a prefix in live order, with the window still load-bearing", () => {
+        const { live, ours, span, unwindowed } = foldThreeReplay();
 
         expect(orderAlignment(ours, live).ok).toBe(true);
-        // The witness: the same entries, taken from the resolved view, come out in an order pi never sent.
-        expect(orderAlignment(shuffled, live).ok).toBe(false);
-        // They lead with the *older* summary - a summary sits at index 0 either way, which is why position alone
-        // says nothing and identity does.
-        expect(wireKey(shuffled)[0]).not.toBe(wireKey(live)[0]);
         expect(wireKey(ours)[0]).toBe(wireKey(live)[0]);
-        // And the window is load-bearing on its own, not just the ordering: without it the span reaches past the
-        // last fold into text no provider ever cached.
+        // The window, not the entry order, is what keeps this a prefix: without it the span reaches past the last
+        // fold into text no provider ever cached.
         expect(unwindowed.entries.length).toBeGreaterThan(span.entries.length);
     });
 

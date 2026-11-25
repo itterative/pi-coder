@@ -39,7 +39,8 @@ row describes a body that no longer exists and is rejected, counted in `staleAnc
 
 Report bands are four, over these tiers: 5% `exact-cut`, which `src=exact` and `src=exact-anchor` both get — the
 `exact-anchor` label exists without a band of its own — (a disagreement there means the request is *not* the body that
-count describes: check `skippedEnt` and for a fold or model change inside the span), 5% `head-ledger`
+count describes: check for a fold or model change inside the span; `skippedEnt` is always 0 now that seeding
+loads every entry type), 5% `head-ledger`
 (`--ledger-estimate-skew`), 15% `usage-anchor`, 50% `chars4`. `src=` prints `exact` / `ledger` / `anchor` /
 `chars4` / `unrecorded`, and `stale=` prints only when non-zero. Two bands for one quantity is deliberate: one
 threshold for both would either bury the anchor or cry wolf on the heuristic.
@@ -111,8 +112,8 @@ asserted as equality). Measured 3 of 3 real compactions in `.state/agent-session
 state-root relocation; they are now under `<agent-dir>/pi-coder/agent-sessions/`) cut on an assistant with
 usable usage, for a structural reason: `findCutPoint` snaps forward to the first *valid* cut point at or after the
 entry that crossed the keep budget, and a `toolResult` is not valid (`compaction.js:227-240`) — so a mid-turn
-crossing lands on the assistant that consumed it. `skippedEntries > 0` disqualifies the tier, because a row stage 1
-could not append makes our span smaller than the body counted.
+crossing lands on the assistant that consumed it. `skippedEntries > 0` disqualifies the tier, but seeding loads
+every entry type, so the field is always 0 now.
 
 **Retracted: the claim that pi's `keepRecentTokens` is a floor that can only overshoot.** The forward snap can leave
 the retained tail **under** budget when the crossing entry is itself a huge `toolResult` swept into the summary.

@@ -129,8 +129,9 @@ begins with the newest checkpoint no matter where its row sits, and the retained
 fold's firstKept, cut)` ends *before* the checkpoint row and stage 1 sends a body simply short of the cached front
 message: `at messages[2] ours=assistant/1082c pi=user/11910c`, with everything after aligned one place apart.
 `stageOneSpanEntries` closes it by appending the newest fold row when the slice lacks it — appending, not
-prepending, because a copied row hoists only when it is last among the fold rows, and only by then has
-`firstCopiedId` resolved so its `firstKeptEntryId` names an entry the copy contains. `hosted-three-folds` cannot
+prepending, because the row hoists only when it is last among the fold rows. Seeding keeps its original id, so the
+append also relinks its `parentId` to the span's last entry, and `spanSeedEntries` rebases its `firstKeptEntryId`
+onto the first seeded entry; otherwise pi's context builder would drop the body before the fold. `hosted-three-folds` cannot
 reach this shape (both its fold rows fall inside the window), which is why a second real session became a fixture:
 `hosted-cut-before-checkpoint.jsonl`.
 
@@ -140,9 +141,10 @@ and a missing head both surface as `first=messages[2]` and are told apart exactl
 explain is not a false alarm.
 
 `test/modules/compaction/session-fixture.test.ts` pins this on `hosted-three-folds.jsonl`, whose fold-3 window
-holds two summaries, and carries a counterfactual: the same entries taken from the resolved view must **not**
-align. Order, not membership, is the invariant, so the assertions compare message identity at each position — the
-front slot holds *a* summary either way, which is why index alone proves nothing.
+holds two summaries. Seeding the window runs pi's hoist once, so the body aligns with the live request; the window,
+not the entry order, is what keeps it a prefix. Order and membership are both invariants, so the assertions compare
+message identity at each position — the front slot holds *a* summary either way, which is why index alone proves
+nothing.
 
 **pi 1.1.0 change (2026-10-17).** `buildSessionProjection` now emits a summary message only for the `compaction`
 entry at index 0; a retained older compaction contributes no message, so the live body carries **one** summary

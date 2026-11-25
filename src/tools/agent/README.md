@@ -101,7 +101,8 @@ extension list, run the manual pass:
    `model_response(native)`, `attempt(serialized)`, `model_response(serialized)`, `final_summary`, `outcome`.
    The two `model_response` records are the stage outputs; `final_summary` is the exact text persisted. Check
    that the native `attempt` reports `outcome: "accepted"` with a non-zero `usage.cacheRead` (that is the
-   cache being reused), that `copiedEntries` is non-zero and `skippedEntries` is small, and that
+   cache being reused), that `copiedEntries` is non-zero and `skippedEntries` is zero (seeding loads every
+   entry type), and that
    `prefix.firstDivergence` is `"tail"` with `prefixUsable: true`. Then open the child's session JSONL and
    check the `compaction` entry's `details.route` matches the `outcome`, its `usage` is non-zero (so session
    totals keep counting summarization work), and `summary` opens with pi's `## Goal` section, which is what the

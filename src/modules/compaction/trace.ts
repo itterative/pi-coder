@@ -134,7 +134,7 @@ export interface CompactionAttemptFields {
     messageCount?: number;
     serializedChars?: number;
     droppedBlocks?: number;
-    /** Stage 1 only: transcript entries copied into the in-memory span, and types that could not be. */
+    /** Stage 1 only: transcript entries seeded into the in-memory span. */
     copiedEntries?: number;
     /**
      * Stage 1 only: the boundary actually used, which is core's unless the repair found that one unsendable.
@@ -144,6 +144,7 @@ export interface CompactionAttemptFields {
     chosenFirstKeptEntryId?: string;
     /** Stage 1 only: the boundary core proposed, kept so a move can be measured after the fact. */
     proposedFirstKeptEntryId?: string;
+    /** Stage 1 only: entries the seed could not load. Always 0 now that seeding loads every type. */
     skippedEntries?: number;
     /**
      * Stage 1 only: whether pi's `firstKeptEntryId` named an entry on this branch. False means the span came back

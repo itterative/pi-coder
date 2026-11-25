@@ -127,9 +127,10 @@ That is exactly a cut sitting below the newest fold's row — the capture's seco
 
 Two guards, each found by a test that failed for a reason worth keeping:
 
-- **`skippedEntries > 0` disqualifies the ledger too**, by the same guard that disqualifies `keptEntry`, and for the
-  same reason: a row stage 1 could not copy makes our span narrower than the stored rows imply, so every number built
-  from those rows over-sizes the request. The defect was not hypothetical — when the head's anchor *is* the cut entry,
+- **`skippedEntries > 0` disqualifies the ledger too**, by the same guard that disqualifies `keptEntry`: a row
+  stage 1 could not copy would make our span narrower than the stored rows imply, so every number built from those
+  rows over-sizes the request. Seeding loads every entry type, so the field is always 0 and the guard cannot fire;
+  it remains the invariant the ledger relies on. The defect was not hypothetical — when the head's anchor *is* the cut entry,
   `head + rows` reproduces that entry's prompt count exactly (the range subtracted to solve the head is the range
   charged back as rows), so the ledger handed back the very number `exact-cut` was disqualified from using and the fit
   gate skipped stage 1 on a run `handler.test.ts` pins as two-stage. One guard for both tiers, since they are refused

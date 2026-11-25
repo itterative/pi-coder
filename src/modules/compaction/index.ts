@@ -70,9 +70,10 @@ import {
     formatFileLists,
 } from "./sections";
 import {
-    buildSpanSession,
+    cutMessages,
+    fileOrderSizingEntries,
     previousFoldWindowStart,
-    skippedEntryCount,
+    sizingEntries,
     stageOneSpanEntries,
 } from "./span-session";
 import { type SummarizationFailureCause, causeRationale, isTerminalCause } from "./failure";
@@ -871,7 +872,10 @@ function spanMessages(input: StageContext): {
     prompt?: string;
     /** The declarations the span replays, with `constrainedSampling` intact; the fallback when none were retained. */
     tools?: Tool[];
+    /** The span entries on the ledger's view, with their resolved messages baked in. */
     entries: SessionEntry[];
+    /** The whole resolved view, file-ordered, for the ledger's fold and row arithmetic. */
+    sizing: SessionEntry[];
     /**
      * The branch in pi's own file order, which is what the head ledger walks: the window above is a slice of it,
      * and a head is solved from fold rows and counted replies that sit outside the slice.
@@ -891,13 +895,13 @@ function spanMessages(input: StageContext): {
     // counted by a provider if it survives into the resolved context, which is what stage 1's request is built
     // from. A compaction between them would put a summary message where the count was taken.
     const entries = contextEntry ? resolved : branch;
-    // The window, not the resolved list: see `stageOneSpanEntries`. `entries` stays the source of `keptEntry`,
-    // because a count is only exact if the boundary survived into the resolved view, and the window's order says
-    // nothing about that.
-    const span = stageOneSpanEntries(branch, cut.firstKeptEntryId);
-    const built = buildSpanSession(span.entries, ctx.cwd);
-    const context = built.sessionManager.buildSessionContext().messages;
-    const converted = convertToLlm(context);
+    // The projection is the request the parent sent, up to the cut: checkpoint hoisted, edits applied. Stage 1
+    // takes its messages directly, and the ledger gets the same rows in a shape its tiers already understand.
+    const projection = ctx.sessionManager.buildSessionProjection();
+    const sizing = fileOrderSizingEntries(projection.entries, branch);
+    const span = stageOneSpanEntries(projection, cut.firstKeptEntryId);
+    const spanEntries = sizingEntries(span.entries);
+    const converted = convertToLlm(cutMessages(span));
     // pi 1.1 replays the prompt as the span's leading system message, and the request already carries it as its
     // system field; leaving the copy in the ladder would send the prompt twice and shift every message after it.
     // Its text is still the best fallback when no request body has been retained - a first fold's copy is the
@@ -915,13 +919,14 @@ function spanMessages(input: StageContext): {
                 ? getSystemMessageText(leading)
                 : undefined,
         tools,
-        entries: span.entries,
+        entries: spanEntries,
+        sizing,
         branch,
         keptEntry: entries.find((entry) => entry.id === cut.firstKeptEntryId),
         boundary: countBoundary(branch),
         fields: {
-            copiedEntries: built.copiedEntries,
-            skippedEntries: skippedEntryCount(built.skippedEntries),
+            copiedEntries: span.entries.length,
+            skippedEntries: 0,
             cutFound: span.cutFound,
             // Where the span ends, which is core's id unless the repair found that boundary unsendable.
             chosenFirstKeptEntryId: cut.firstKeptEntryId,
@@ -959,25 +964,23 @@ async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<
     });
     const reportedContextTokens = ctx.getContextUsage()?.tokens ?? null;
     const extraTokens = estimateTextTokens(instruction);
-    // A row stage 1 could not copy makes our span narrower than the stored rows imply, so every number built
-    // from those rows over-sizes the request - the kept reply's own count and a head solved from it alike, since
-    // a head anchored on that reply reproduces exactly the count the first tier is disqualified from using. One
-    // guard for both, refused for one reason, and `skippedEntries` records it.
+    // Seeding loads every entry type, so this is always true today; it stays as the guard the ledger relies on
+    // if the span is ever rebuilt through a path that can narrow it.
     const copiedCleanly = span.fields.skippedEntries === 0;
     // The head ledger sizes this same body from the branch and the window stage 1 actually copies. It is recorded
     // whether or not it wins the tier, because the only way to learn how accurate it is live is to compare it with
     // the provider's count of the request that went out - and on a run where another tier answered, that count is
     // the only ground truth there is.
     const ledger = copiedCleanly
-        ? spanBodyTokens(span.branch, {
+        ? spanBodyTokens(span.sizing, {
               windowStartId: previousFoldWindowStart(span.branch),
               cutId: cut.firstKeptEntryId,
               extraTokens,
               boundary: span.boundary,
           })
         : null;
-    // The exact-cut tier is only exact if our span really was that reply's body, so an entry stage 1 could not
-    // copy rules it out - which `skippedEntries` already records as the reason.
+    // The exact-cut tier is only exact if our span really was that reply's body. Seeding cannot narrow it, but
+    // the guard keeps an alternate builder honest.
     const counted = countSpanTokens({
         spanEntries: span.entries,
         keptEntry: copiedCleanly ? span.keptEntry : undefined,
@@ -1336,13 +1339,19 @@ async function compactWithPiCoder(
     // `spanBodyTokens` call would rescan the window each time. The sizing tier below still uses
     // `spanBodyTokens`, because that route carries the instruction inside its body and its refusals are pinned
     // against provider counts; `ledger.test.ts` proves the two agree position by position.
-    const sizer = spanSizer(branch, {
+    // The size is taken on the resolved view, so a row a context edit removed costs zero and a replacement is
+    // charged as its replacement. The ids the walk returns are still the branch's, so the cut remains sliceable.
+    const sizing = fileOrderSizingEntries(
+        ctx.sessionManager.buildSessionProjection().entries,
+        branch,
+    );
+    const sizer = spanSizer(sizing, {
         windowStartId: previousFoldWindowStart(branch),
         boundary,
     });
     const live = liveContextSize(sizer, ctx);
     const cut = chooseSpanCut({
-        branch,
+        branch: sizing,
         proposedFirstKeptEntryId: preparation.firstKeptEntryId,
         boundary,
         liveTokens: live.tokens,

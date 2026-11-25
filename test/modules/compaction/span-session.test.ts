@@ -139,23 +139,78 @@ describe("stage-1 span transcript", () => {
         ];
         const built = buildSpanSession(withUncopyable, "/tmp");
 
-        expect(built.skippedEntries).toEqual({ branch_summary: 1, label: 1 });
-        expect(skippedEntryCount(built.skippedEntries)).toBe(2);
-        expect(rendered(built.sessionManager.buildSessionContext().messages)).toContain(
-            "first request",
-        );
+        expect(built.skippedEntries).toEqual({});
+        expect(skippedEntryCount(built.skippedEntries)).toBe(0);
+        expect(built.copiedEntries).toBe(withUncopyable.length);
+        const text = rendered(built.sessionManager.buildSessionContext().messages);
+        expect(text).toContain("a branch that was left behind");
+        expect(text).toContain("first request");
     });
 
-    it("copies plain custom entries even though they never reach the model", () => {
+    it("loads plain custom entries even though they never reach the model", () => {
         const manager = SessionManager.inMemory("/tmp");
         append(manager, userMessage("visible"));
         const marker = manager.appendCustomEntry("pi-coder:scratchpad", { path: "/tmp/x" });
         const built = buildSpanSession(manager.getBranch(), "/tmp");
 
         expect(built.copiedEntries).toBe(2);
-        expect(built.sessionManager.getEntry(marker)).toBeUndefined();
+        expect(built.sessionManager.getEntry(marker)).toBeDefined();
         expect(rendered(built.sessionManager.buildSessionContext().messages)).not.toContain(
             "/tmp/x",
+        );
+    });
+
+    it("lets the projection drop an entry a null context edit removed", () => {
+        const manager = SessionManager.inMemory("/tmp");
+        append(manager, userMessage("first request"));
+        const trigger = manager.appendCustomMessageEntry(
+            "pi-coder:continue",
+            "<pi_coder_notice>MARKER</pi_coder_notice>",
+            false,
+        );
+        manager.appendContextEdit(trigger, null);
+        const tail = append(manager, userMessage("the retained tail starts here"));
+
+        const span = stageOneSpanEntries(manager.getBranch(), tail);
+        const built = buildSpanSession(span.entries, "/tmp");
+        const text = rendered(built.sessionManager.buildSessionContext().messages);
+
+        // The raw span keeps the target and the edit; the seed is what applies it, the same way core does.
+        expect(span.entries.some((entry) => entry.id === trigger)).toBe(true);
+        expect(text).not.toContain("MARKER");
+        expect(text).toContain("first request");
+        expect(
+            manager
+                .buildSessionProjection()
+                .messages.some(
+                    (message) =>
+                        message.role === "custom" && message.customType === "pi-coder:continue",
+                ),
+        ).toBe(false);
+    });
+
+    it("applies a context edit that sits after the cut", () => {
+        const manager = SessionManager.inMemory("/tmp");
+        append(manager, userMessage("first request"));
+        const trigger = manager.appendCustomMessageEntry(
+            "pi-coder:continue",
+            "<pi_coder_notice>MARKER</pi_coder_notice>",
+            false,
+        );
+        const tail = append(manager, userMessage("the retained tail starts here"));
+        // The omission lands at turn_end, after the response and after the cut the fold chose.
+        manager.appendContextEdit(trigger, null);
+
+        const span = stageOneSpanEntries(manager.getBranch(), tail);
+
+        // The edit is after the cut, so the span does not contain it by file order; it is reattached and wins.
+        expect(span.entries.some((entry) => entry.id === trigger)).toBe(true);
+        expect(span.entries.some((entry) => entry.id === tail)).toBe(false);
+        expect(span.entries[span.entries.length - 1]?.type).toBe("context_edit");
+
+        const built = buildSpanSession(span.entries, "/tmp");
+        expect(rendered(built.sessionManager.buildSessionContext().messages)).not.toContain(
+            "MARKER",
         );
     });
 
